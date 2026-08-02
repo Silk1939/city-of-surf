@@ -98,7 +98,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         metalKitView.colorPixelFormat = .bgra8Unorm_srgb
         metalKitView.sampleCount = 1
         // Dusk canyon sky
-        metalKitView.clearColor = MTLClearColor(red: 0.28, green: 0.36, blue: 0.48, alpha: 1)
+        metalKitView.clearColor = MTLClearColor(red: 0.95, green: 0.48, blue: 0.22, alpha: 1)
 
         let vd = Self.buildMetalVertexDescriptor()
 
@@ -287,8 +287,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let base = -fmod(state.runDistance, buildingSpacing)
         for i in 0..<16 {
             let z = base + Float(i) * buildingSpacing - 8
-            let hL = 12 + Float((i * 3) % 9) * 2.8
-            let hR = 14 + Float((i * 5) % 8) * 3.1
+            let hL = 18 + Float((i * 3) % 9) * 3.5
+            let hR = 20 + Float((i * 5) % 8) * 3.8
             let wL = 7.5 + Float(i % 3) * 0.8
             let wR = 7.0 + Float((i + 1) % 3) * 0.9
             let left = Math.translation(SIMD3(-12.5, hL * 0.5, z)) * Math.scale(SIMD3(wL, hL, 11))
@@ -320,7 +320,17 @@ final class Renderer: NSObject, MTKViewDelegate {
         items.append(DrawItem(
             mesh: surferMesh,
             modelMatrix: surferModel,
-            color: SIMD4(0.95, 0.42, 0.18, 1),
+            color: SIMD4(0.12, 0.12, 0.12, 1),  // black suit
+            isWave: false,
+            materialId: 3
+        ))
+        let accent = Math.translation(SIMD3(sp.x, sp.y + 0.15, sp.z - 0.05))
+            * leanRot
+            * Math.scale(SIMD3(0.58, 0.35, 0.12))
+        items.append(DrawItem(
+            mesh: unitBox,
+            modelMatrix: accent,
+            color: SIMD4(0.45, 0.98, 0.18, 1),
             isWave: false,
             materialId: 3
         ))
@@ -331,7 +341,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         items.append(DrawItem(
             mesh: unitBox,
             modelMatrix: board,
-            color: SIMD4(0.15, 0.12, 0.08, 1),
+            color: SIMD4(0.45, 0.95, 0.15, 1),
             isWave: false,
             materialId: 3
         ))

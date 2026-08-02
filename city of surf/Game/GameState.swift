@@ -73,7 +73,7 @@ final class GameState: ObservableObject {
 
     func fillFrameUniforms(_ frame: inout FrameUniforms, viewProjection: matrix_float4x4, cameraPosition: SIMD3<Float>) {
         frame.viewProjectionMatrix = viewProjection
-        frame.lightDirection = simd_normalize(SIMD3<Float>(0.45, 0.78, 0.35))
+        frame.lightDirection = simd_normalize(SIMD3<Float>(0.55, 0.55, 0.45))  // low sunset key
         frame.time = time
         frame.waveAmplitude = wave.amplitude
         frame.waveLength = wave.wavelength

@@ -6,10 +6,10 @@
 import simd
 
 struct ChaseCamera {
-    var eyeOffset = SIMD3<Float>(0, 5.2, -9.5)
-    var lookAhead = SIMD3<Float>(0, 1.8, 14)
-    var smoothEye = SIMD3<Float>(0, 6, -10)
-    var fovDegrees: Float = 68
+    var eyeOffset = SIMD3<Float>(0, 9.5, -14.0)
+    var lookAhead = SIMD3<Float>(0, 3.5, 18)
+    var smoothEye = SIMD3<Float>(0, 10, -14)
+    var fovDegrees: Float = 72
     var nearZ: Float = 0.1
     var farZ: Float = 260
 

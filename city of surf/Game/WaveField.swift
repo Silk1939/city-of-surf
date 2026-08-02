@@ -8,12 +8,12 @@
 import simd
 
 struct WaveField {
-    var amplitude: Float = 5.5
-    var faceWidth: Float = 14.0
+    var amplitude: Float = 16.0
+    var faceWidth: Float = 18.0
     var speed: Float = 16.0
-    var steepness: Float = 0.75
+    var steepness: Float = 0.9
     var direction: SIMD2<Float> = SIMD2(0, 1)
-    var rippleAmplitude: Float = 0.12
+    var rippleAmplitude: Float = 0.18
     var rippleLength: Float = 5.5
 
     var wavelength: Float {
@@ -41,9 +41,9 @@ struct WaveField {
         let lip = crestLip(rz)
         let a = amplitude
 
-        var y = a * (body * 0.82 + lip * steepness * 0.55)
+        var y = a * (body * 0.88 + lip * steepness * 0.72)
         let faceMask = body * (1.0 - body) * 4.0
-        let curl = faceMask * a * 0.35 * steepness
+        let curl = faceMask * a * 0.42 * steepness
         let dz = -curl
         var dx: Float = 0
 

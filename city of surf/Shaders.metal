@@ -47,10 +47,10 @@ static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread f
     float steep = frame.waveSteepness;
 
     float3 d = float3(0.0);
-    d.y = a * (body * 0.82 + lip * steep * 0.55);
+    d.y = a * (body * 0.88 + lip * steep * 0.72);
 
     float faceMask = body * (1.0 - body) * 4.0;
-    d.z = -(faceMask * a * 0.35 * steep);
+    d.z = -(faceMask * a * 0.42 * steep);
 
     float rk = (2.0 * M_PI_F) / max(frame.rippleLength, 0.001);
     float chop = frame.rippleAmplitude
@@ -137,8 +137,8 @@ fragment float4 solidFragment(VOut in [[stage_in]],
     }
 
     float fog = saturate((length(in.worldPos - frame.cameraPosition) - 40.0) / 130.0);
-    float3 fogCol = float3(0.35, 0.42, 0.55);
-    base = mix(base, fogCol, fog);
+    float3 fogCol = float3(0.92, 0.52, 0.28);
+    base = mix(base, fogCol, fog * 0.65);
     return float4(base, 1.0);
 }
 
@@ -166,26 +166,30 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float3 N = normalize(in.normal);
     float3 V = normalize(frame.cameraPosition - in.worldPos);
     float3 L = normalize(frame.lightDirection);
-    float fresnel = pow(1.0 - saturate(dot(N, V)), 3.0);
+    float fresnel = pow(1.0 - saturate(dot(N, V)), 2.8);
 
-    float3 deep = float3(0.02, 0.12, 0.22);
-    float3 mid = float3(0.05, 0.38, 0.48);
-    float3 shallow = float3(0.18, 0.72, 0.78);
+    // Concept-art turquoise wall
+    float3 deep = float3(0.02, 0.22, 0.32);
+    float3 mid = float3(0.06, 0.55, 0.62);
+    float3 shallow = float3(0.25, 0.88, 0.85);
     float h = saturate(in.worldPos.y / max(frame.waveAmplitude, 0.001));
-    float3 water = mix(deep, mid, smoothstep(0.0, 0.55, h));
-    water = mix(water, shallow, smoothstep(0.55, 1.0, h));
+    float3 water = mix(deep, mid, smoothstep(0.0, 0.45, h));
+    water = mix(water, shallow, smoothstep(0.45, 1.0, h));
 
-    // Whitewater on the single crest lip.
-    float3 foamCol = float3(0.92, 0.96, 1.0);
-    water = mix(water, foamCol, pow(in.foam, 1.35) * 0.95);
-    water += fresnel * float3(0.45, 0.55, 0.65);
+    // Thick white crest foam
+    float3 foamCol = float3(0.95, 0.98, 1.0);
+    float foamAmt = pow(saturate(in.foam), 1.1);
+    water = mix(water, foamCol, foamAmt * 0.98);
+    water += fresnel * float3(0.55, 0.7, 0.75);
 
+    // Sunset warm specular
     float ndotl = saturate(dot(N, L));
     float3 H = normalize(L + V);
-    float spec = pow(saturate(dot(N, H)), 96.0) * (0.35 + 0.65 * fresnel);
-    water = water * (0.4 + 0.6 * ndotl) + spec * float3(0.9, 0.95, 1.0);
+    float spec = pow(saturate(dot(N, H)), 72.0) * (0.4 + 0.6 * fresnel);
+    water = water * (0.38 + 0.62 * ndotl) + spec * float3(1.0, 0.92, 0.75);
 
-    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 120.0);
-    water = mix(water, float3(0.35, 0.42, 0.55), fog);
+    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 40.0) / 140.0);
+    float3 fogCol = float3(0.95, 0.55, 0.28); // sunset haze
+    water = mix(water, fogCol, fog * 0.55);
     return float4(water, 1.0);
 }

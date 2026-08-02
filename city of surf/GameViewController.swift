@@ -86,7 +86,7 @@ final class GameViewController: UIViewController {
 
     private func setupInput() {
         inputHandler.attach(to: mtkView) { [weak self] in
-            self?.gameState.surfer.x ?? 0
+            self?.gameState.surfer.targetX ?? 0
         }
         inputHandler.onSteer = { [weak self] x in
             self?.gameState.steer(toWorldX: x)

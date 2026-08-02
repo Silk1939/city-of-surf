@@ -48,10 +48,10 @@ final class InputHandler: NSObject, UIGestureRecognizerDelegate {
         guard let view else { return }
         switch gesture.state {
         case .began:
-            panStartSurferX = getSurferX?() ?? 0
+            panStartSurferX = getSurferX?() ?? 0  // world X; swipe left -> character left
         case .changed, .ended:
             let dx = gesture.translation(in: view).x
-            onSteer?(panStartSurferX + Float(dx / pixelsPerMeter))
+            onSteer?(panStartSurferX - Float(dx / pixelsPerMeter))
         default:
             break
         }
