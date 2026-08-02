@@ -12,16 +12,30 @@ struct ChaseCamera {
     var fovDegrees: Float = 72
     var nearZ: Float = 0.1
     var farZ: Float = 260
+    private var shakeOffset = SIMD3<Float>(repeating: 0)
 
-    mutating func update(follow target: SIMD3<Float>, lean: Float, deltaTime: Float) {
+    mutating func update(follow target: SIMD3<Float>, lean: Float, shake: Float, deltaTime: Float) {
         var desired = target + eyeOffset
         desired.x += lean * 1.2
         let blend = min(1, deltaTime * 7)
         smoothEye += (desired - smoothEye) * blend
+
+        if shake > 0.01 {
+            let s = shake * shake
+            shakeOffset = SIMD3(
+                Float.random(in: -0.35...0.35) * s,
+                Float.random(in: -0.25...0.25) * s,
+                Float.random(in: -0.2...0.2) * s
+            )
+        } else {
+            shakeOffset *= 0.7
+        }
     }
 
     func viewMatrix(follow target: SIMD3<Float>) -> matrix_float4x4 {
-        Math.lookAt(eye: smoothEye, target: target + lookAhead, up: SIMD3(0, 1, 0))
+        let eye = smoothEye + shakeOffset
+        let look = target + lookAhead + shakeOffset * 0.35
+        return Math.lookAt(eye: eye, target: look, up: SIMD3(0, 1, 0))
     }
 
     func projectionMatrix(aspect: Float) -> matrix_float4x4 {

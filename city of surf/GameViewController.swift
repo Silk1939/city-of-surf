@@ -91,6 +91,9 @@ final class GameViewController: UIViewController {
         inputHandler.onSteer = { [weak self] x in
             self?.gameState.steer(toWorldX: x)
         }
+        inputHandler.onFlick = { [weak self] meters in
+            self?.gameState.flick(meters: meters)
+        }
         inputHandler.onVerticalSwipe = { [weak self] direction in
             self?.gameState.handleVertical(direction)
         }

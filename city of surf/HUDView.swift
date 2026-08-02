@@ -11,27 +11,73 @@ struct HUDView: View {
     var body: some View {
         ZStack {
             VStack {
-                HStack {
-                    Text("\(gameState.score) m")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(gameState.distanceScore) m")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color(red: 1.0, green: 0.84, blue: 0.15))
+                                .frame(width: 14, height: 14)
+                                .overlay(Circle().stroke(.white.opacity(0.5), lineWidth: 1))
+                            Text("\(gameState.coins)")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color(red: 1.0, green: 0.9, blue: 0.35))
+                                .scaleEffect(gameState.collectPulse > 0 ? 1.15 : 1.0)
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
                     Spacer()
+                    Text("CITY SURFER")
+                        .font(.system(size: 13, weight: .black, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.white, Color(red: 0.55, green: 0.95, blue: 0.2)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .padding(.top, 6)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 56)
                 Spacer()
             }
+            .animation(.easeOut(duration: 0.15), value: gameState.collectPulse)
 
             if gameState.isGameOver {
-                Color.black.opacity(0.5).ignoresSafeArea()
-                VStack(spacing: 18) {
+                Color.black.opacity(0.55).ignoresSafeArea()
+                VStack(spacing: 16) {
                     Text("WIPEOUT")
-                        .font(.system(size: 40, weight: .black, design: .rounded))
+                        .font(.system(size: 42, weight: .black, design: .rounded))
                         .foregroundStyle(.white)
-                    Text("\(gameState.score) m")
-                        .font(.system(size: 24, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.9))
+                    HStack(spacing: 18) {
+                        VStack {
+                            Text("\(gameState.distanceScore) m")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                            Text("Distanz")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        VStack {
+                            Text("\(gameState.coins)")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color(red: 1.0, green: 0.85, blue: 0.2))
+                            Text("Coins")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        VStack {
+                            Text("\(gameState.score)")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .foregroundStyle(Color(red: 0.55, green: 0.95, blue: 0.25))
+                            Text("Score")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                    }
+                    .foregroundStyle(.white)
                     Button {
                         gameState.reset()
                     } label: {
@@ -43,7 +89,7 @@ struct HUDView: View {
                             .background(Color(red: 0.95, green: 0.75, blue: 0.2))
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    Text("Finger halten & gleiten · hoch springen · runter ducken")
+                    Text("Finger gleiten · hoch springen · runter ducken (Ampeln!)")
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.7))
                         .multilineTextAlignment(.center)

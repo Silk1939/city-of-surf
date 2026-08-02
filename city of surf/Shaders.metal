@@ -130,6 +130,19 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         float rim = pow(1.0 - saturate(dot(N, V)), 2.5);
         base += rim * float3(0.15, 0.18, 0.25) * facing;
     }
+    // Gold coins
+    else if (object.materialId > 4.5 && object.materialId < 5.5) {
+        float3 H = normalize(L + V);
+        float spec = pow(saturate(dot(N, H)), 64.0);
+        float sparkle = pow(saturate(dot(N, V)), 4.0);
+        base = float3(1.0, 0.82, 0.15) * (0.55 + 0.45 * ndotl);
+        base += spec * float3(1.0, 0.95, 0.6) * 0.85;
+        base += sparkle * float3(1.0, 0.9, 0.4) * 0.35;
+        // star cut hint
+        float ang = atan2(in.texCoord.y - 0.5, in.texCoord.x - 0.5);
+        float star = smoothstep(0.15, 0.05, abs(fract(ang * 2.5 / 3.14159) - 0.5));
+        base = mix(base, float3(1.0, 0.95, 0.55), star * 0.25);
+    }
     else {
         float3 H = normalize(L + V);
         float spec = pow(saturate(dot(N, H)), 48.0);

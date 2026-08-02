@@ -32,7 +32,14 @@ struct SurferController {
     }
 
     mutating func setTargetX(_ value: Float) {
-        targetX = max(-Self.maxX, min(Self.maxX, value))
+        let clamped = max(-Self.maxX, min(Self.maxX, value))
+        targetX = clamped
+        // Near-instant response while dragging — no sluggish drift.
+        x = clamped
+    }
+
+    mutating func applyFlick(_ meters: Float) {
+        setTargetX(targetX + meters)
     }
 
     mutating func jump() {
@@ -48,11 +55,12 @@ struct SurferController {
     }
 
     mutating func update(deltaTime: Float, wave: WaveField, time: Float, scrollZ: Float) {
-        let follow = min(1, deltaTime * 16)
+        // Keep a tiny ease only if something else nudged target (flick residual).
+        let follow = min(1, deltaTime * 28)
         let prevX = x
         x += (targetX - x) * follow
         let vx = (x - prevX) / max(deltaTime, 0.0001)
-        lean += ((vx / 14.0) - lean) * min(1, deltaTime * 10)
+        lean += ((vx / 18.0) - lean) * min(1, deltaTime * 14)
         lean = max(-1, min(1, lean))
 
         if pose != .standing {

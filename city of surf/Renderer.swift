@@ -10,7 +10,7 @@ import simd
 import QuartzCore
 
 let maxBuffersInFlight = 3
-let maxObjectsPerFrame = 128
+let maxObjectsPerFrame = 256
 
 nonisolated enum RendererError: Error {
     case badVertexDescriptor
@@ -346,7 +346,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             materialId: 3
         ))
 
-        // Obstacles (cabs / debris)
+        // Obstacles — composed vehicles / props
         for o in state.obstacles.obstacles where o.active {
             let pos = state.obstacles.worldPosition(
                 for: o,
@@ -355,18 +355,124 @@ final class Renderer: NSObject, MTKViewDelegate {
                 time: state.time,
                 scrollZ: state.scrollZ
             )
-            let rot = Math.rotation(radians: o.roll * 0.35, axis: SIMD3(0, 0, 1))
-            let model = Math.translation(pos) * rot * Math.scale(o.size)
+            let rot = Math.rotation(radians: o.roll * 0.28, axis: SIMD3(0, 0, 1))
+            let yaw = Math.rotation(radians: .pi * 0.5, axis: SIMD3(0, 1, 0))
+            appendObstacle(items: &items, kind: o.kind, at: pos, roll: rot, yaw: yaw)
+        }
+
+        // Coins
+        let spin = state.time * 4.0
+        for c in state.coinSystem.coins where c.active {
+            let pos = state.coinSystem.worldPosition(
+                for: c,
+                runDistance: state.runDistance,
+                wave: state.wave,
+                time: state.time,
+                scrollZ: state.scrollZ
+            )
+            let model = Math.translation(pos)
+                * Math.rotation(radians: spin + c.localZ, axis: SIMD3(0, 1, 0))
+                * Math.scale(SIMD3(0.85, 0.12, 0.85))
             items.append(DrawItem(
                 mesh: unitBox,
                 modelMatrix: model,
-                color: SIMD4(0.95, 0.78, 0.12, 1),
+                color: SIMD4(1.0, 0.84, 0.15, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 5
             ))
         }
 
         return items
+    }
+
+    private func appendObstacle(
+        items: inout [DrawItem],
+        kind: ObstacleKind,
+        at pos: SIMD3<Float>,
+        roll: matrix_float4x4,
+        yaw: matrix_float4x4
+    ) {
+        let base = Math.translation(pos) * roll
+        switch kind {
+        case .taxi, .police:
+            let bodyColor: SIMD4<Float> = kind == .police
+                ? SIMD4(0.12, 0.25, 0.75, 1)
+                : SIMD4(0.95, 0.78, 0.1, 1)
+            // body
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * yaw * Math.scale(SIMD3(2.0, 1.15, 4.0)),
+                color: bodyColor,
+                isWave: false,
+                materialId: 4
+            ))
+            // cabin
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * yaw * Math.translation(SIMD3(0, 0.85, -0.2)) * Math.scale(SIMD3(1.7, 0.9, 2.2)),
+                color: SIMD4(0.15, 0.18, 0.22, 1),
+                isWave: false,
+                materialId: 4
+            ))
+            // light bar / taxi sign
+            let roofColor: SIMD4<Float> = kind == .police
+                ? SIMD4(0.95, 0.15, 0.15, 1)
+                : SIMD4(0.15, 0.15, 0.15, 1)
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * yaw * Math.translation(SIMD3(0, 1.35, 0.1)) * Math.scale(SIMD3(1.1, 0.25, 0.7)),
+                color: roofColor,
+                isWave: false,
+                materialId: 4
+            ))
+        case .barrier:
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * Math.scale(SIMD3(2.6, 1.0, 0.55)),
+                color: SIMD4(0.95, 0.45, 0.05, 1),
+                isWave: false,
+                materialId: 4
+            ))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * Math.translation(SIMD3(0, 0.15, 0)) * Math.scale(SIMD3(2.6, 0.25, 0.58)),
+                color: SIMD4(0.1, 0.1, 0.1, 1),
+                isWave: false,
+                materialId: 4
+            ))
+        case .trafficLight:
+            // pole
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * Math.scale(SIMD3(0.28, 3.4, 0.28)),
+                color: SIMD4(0.18, 0.18, 0.2, 1),
+                isWave: false,
+                materialId: 4
+            ))
+            // head
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * Math.translation(SIMD3(0, 1.7, 0)) * Math.scale(SIMD3(0.7, 1.4, 0.55)),
+                color: SIMD4(0.12, 0.12, 0.12, 1),
+                isWave: false,
+                materialId: 4
+            ))
+            // lamps
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * Math.translation(SIMD3(0, 2.1, 0.28)) * Math.scale(SIMD3(0.35, 0.28, 0.2)),
+                color: SIMD4(0.95, 0.15, 0.1, 1),
+                isWave: false,
+                materialId: 4
+            ))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: base * Math.translation(SIMD3(0, 1.7, 0.28)) * Math.scale(SIMD3(0.35, 0.28, 0.2)),
+                color: SIMD4(0.2, 0.9, 0.25, 1),
+                isWave: false,
+                materialId: 4
+            ))
+        }
     }
 
     func draw(in view: MTKView) {
@@ -380,7 +486,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         lastTime = now
 
         state.update(deltaTime: dt)
-        camera.update(follow: state.surfer.position, lean: state.surfer.lean, deltaTime: dt)
+        camera.update(follow: state.surfer.position, lean: state.surfer.lean, shake: state.wipeoutShake, deltaTime: dt)
 
         let previousValueToWaitFor = frameIndex - maxBuffersInFlight
         endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10)
