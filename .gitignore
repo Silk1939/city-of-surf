@@ -1,0 +1,10 @@
+# Xcode / local
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Metal / tooling
+*.air
+*.metallib

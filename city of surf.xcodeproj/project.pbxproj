@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 100;
 	objects = {
 
 /* Begin PBXContainerItemProxy section */
@@ -63,24 +63,18 @@
 /* Begin PBXFrameworksBuildPhase section */
 		0A765D0B301FED990085B397 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A765D23301FED9B0085B397 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A765D2D301FED9B0085B397 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -118,14 +112,10 @@
 			);
 			buildRules = (
 			);
-			dependencies = (
-			);
 			fileSystemSynchronizedGroups = (
 				0A765D10301FED990085B397 /* city of surf */,
 			);
 			name = "city of surf";
-			packageProductDependencies = (
-			);
 			productName = "city of surf";
 			productReference = 0A765D0E301FED990085B397 /* city of surf.app */;
 			productType = "com.apple.product-type.application";
@@ -147,8 +137,6 @@
 				0A765D29301FED9B0085B397 /* city of surfTests */,
 			);
 			name = "city of surfTests";
-			packageProductDependencies = (
-			);
 			productName = "city of surfTests";
 			productReference = 0A765D26301FED9B0085B397 /* city of surfTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -170,8 +158,6 @@
 				0A765D33301FED9B0085B397 /* city of surfUITests */,
 			);
 			name = "city of surfUITests";
-			packageProductDependencies = (
-			);
 			productName = "city of surfUITests";
 			productReference = 0A765D30301FED9B0085B397 /* city of surfUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
@@ -208,7 +194,7 @@
 			);
 			mainGroup = 0A765D05301FED990085B397;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
+			preferredProjectObjectVersion = 100;
 			productRefGroup = 0A765D0F301FED990085B397 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -223,48 +209,36 @@
 /* Begin PBXResourcesBuildPhase section */
 		0A765D0C301FED990085B397 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A765D24301FED9B0085B397 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A765D2E301FED9B0085B397 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0A765D0A301FED990085B397 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A765D22301FED9B0085B397 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 		0A765D2C301FED9B0085B397 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
@@ -282,7 +256,7 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		0A765D3A301FED9B0085B397 /* Debug */ = {
+		0A765D3A301FED9B0085B397 /* Debug configuration for PBXNativeTarget "city of surf" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -292,12 +266,14 @@
 				DEVELOPMENT_TEAM = RFN59MUTQ3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "city of surf/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Flood Surfer";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UIRequiredDeviceCapabilities = metal;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -312,11 +288,11 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "$(TARGET_NAME)/ShaderTypes.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
-		0A765D3B301FED9B0085B397 /* Release */ = {
+		0A765D3B301FED9B0085B397 /* Release configuration for PBXNativeTarget "city of surf" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -326,12 +302,14 @@
 				DEVELOPMENT_TEAM = RFN59MUTQ3;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "city of surf/Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Flood Surfer";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIMainStoryboardFile = Main;
 				INFOPLIST_KEY_UIRequiredDeviceCapabilities = metal;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -346,11 +324,11 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "$(TARGET_NAME)/ShaderTypes.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
-		0A765D3C301FED9B0085B397 /* Debug */ = {
+		0A765D3C301FED9B0085B397 /* Debug configuration for PBXProject "city of surf" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -414,7 +392,7 @@
 			};
 			name = Debug;
 		};
-		0A765D3D301FED9B0085B397 /* Release */ = {
+		0A765D3D301FED9B0085B397 /* Release configuration for PBXProject "city of surf" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -471,7 +449,7 @@
 			};
 			name = Release;
 		};
-		0A765D3F301FED9B0085B397 /* Debug */ = {
+		0A765D3F301FED9B0085B397 /* Debug configuration for PBXNativeTarget "city of surfTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -493,7 +471,7 @@
 			};
 			name = Debug;
 		};
-		0A765D40301FED9B0085B397 /* Release */ = {
+		0A765D40301FED9B0085B397 /* Release configuration for PBXNativeTarget "city of surfTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -515,7 +493,7 @@
 			};
 			name = Release;
 		};
-		0A765D42301FED9B0085B397 /* Debug */ = {
+		0A765D42301FED9B0085B397 /* Debug configuration for PBXNativeTarget "city of surfUITests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -535,7 +513,7 @@
 			};
 			name = Debug;
 		};
-		0A765D43301FED9B0085B397 /* Release */ = {
+		0A765D43301FED9B0085B397 /* Release configuration for PBXNativeTarget "city of surfUITests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
@@ -561,37 +539,33 @@
 		0A765D09301FED990085B397 /* Build configuration list for PBXProject "city of surf" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0A765D3C301FED9B0085B397 /* Debug */,
-				0A765D3D301FED9B0085B397 /* Release */,
+				0A765D3C301FED9B0085B397 /* Debug configuration for PBXProject "city of surf" */,
+				0A765D3D301FED9B0085B397 /* Release configuration for PBXProject "city of surf" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		0A765D39301FED9B0085B397 /* Build configuration list for PBXNativeTarget "city of surf" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0A765D3A301FED9B0085B397 /* Debug */,
-				0A765D3B301FED9B0085B397 /* Release */,
+				0A765D3A301FED9B0085B397 /* Debug configuration for PBXNativeTarget "city of surf" */,
+				0A765D3B301FED9B0085B397 /* Release configuration for PBXNativeTarget "city of surf" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		0A765D3E301FED9B0085B397 /* Build configuration list for PBXNativeTarget "city of surfTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0A765D3F301FED9B0085B397 /* Debug */,
-				0A765D40301FED9B0085B397 /* Release */,
+				0A765D3F301FED9B0085B397 /* Debug configuration for PBXNativeTarget "city of surfTests" */,
+				0A765D40301FED9B0085B397 /* Release configuration for PBXNativeTarget "city of surfTests" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 		0A765D41301FED9B0085B397 /* Build configuration list for PBXNativeTarget "city of surfUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				0A765D42301FED9B0085B397 /* Debug */,
-				0A765D43301FED9B0085B397 /* Release */,
+				0A765D42301FED9B0085B397 /* Debug configuration for PBXNativeTarget "city of surfUITests" */,
+				0A765D43301FED9B0085B397 /* Release configuration for PBXNativeTarget "city of surfUITests" */,
 			);
-			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */

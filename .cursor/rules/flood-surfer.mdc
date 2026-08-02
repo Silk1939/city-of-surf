@@ -1,0 +1,33 @@
+---
+description: Flood Surfer Metal 4 project conventions
+globs:
+alwaysApply: true
+---
+
+# Flood Surfer — Cursor Rules
+
+## Stack
+- Native iOS game: **Swift + Metal 4** (`MTL4CommandQueue`, argument tables, residency sets).
+- UI: UIKit `MTKView` + SwiftUI HUD overlay.
+- Deployment: iOS 26+, Portrait, iPhone.
+- **No RealityKit** for this project.
+
+## Runtime
+- Metal 4 is **device-first**. Simulator is unsupported for runtime (symbols/API unreliable).
+- After meaningful code changes: `make build` (generic iOS device). Feel-test on a physical iPhone.
+- If Metal 4 is missing at runtime, fail with a clear on-screen message — do not silently no-op.
+
+## Architecture
+- One gameplay concern per file under `Game/` (WaveField, Surfer, Obstacles, Input, GameState).
+- Rendering helpers under `Render/`; Metal shaders in `Shaders.metal`.
+- Shared CPU/GPU types live in `ShaderTypes.h`.
+- **Wave height math must stay in sync**: `WaveField.swift` (CPU) and the Gerstner vertex shader (GPU) use the same parameters and formulas.
+
+## Assets
+- Graybox: procedural meshes only until the feel is validated.
+- Prefer CC0 sources later; keep license notes if adding third-party assets.
+
+## Style
+- Match existing Swift/Metal style in the repo.
+- Keep draw submission on the Metal 4 path already established in `Renderer.swift`.
+- Prefer small, compile-checked steps over large rewrites.
