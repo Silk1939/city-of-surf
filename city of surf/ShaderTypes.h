@@ -32,12 +32,21 @@ typedef NS_ENUM(EnumBackingType, VertexAttribute)
 
 typedef NS_ENUM(EnumBackingType, TextureIndex)
 {
-    TextureIndexColor = 0,
+    TextureIndexAlbedo      = 0,
+    TextureIndexNormal      = 1,
+    TextureIndexRoughness   = 2,
+    TextureIndexShadow      = 3,
+    TextureIndexIrradiance  = 4,
+    TextureIndexSpecular    = 5,
+    TextureIndexBrdfLUT     = 6,
+    TextureIndexSky         = 7,
 };
 
 typedef struct
 {
     matrix_float4x4 viewProjectionMatrix;
+    matrix_float4x4 invViewProjectionMatrix;
+    matrix_float4x4 lightViewProjectionMatrix;
     simd_float3 lightDirection;
     float time;
     float waveAmplitude;
@@ -49,9 +58,15 @@ typedef struct
     float rippleAmplitude;
     float rippleLength;
     float scrollZ;
-    float _pad0;
+    float sunIntensity;
     simd_float3 cameraPosition;
-    float _pad1;
+    float iblIntensity;
+    simd_float3 lightColor;
+    float shadowBias;
+    float specularMips;
+    float _padA;
+    float _padB;
+    float _padC;
 } FrameUniforms;
 
 typedef struct
@@ -59,10 +74,10 @@ typedef struct
     matrix_float4x4 modelMatrix;
     simd_float4 color;
     float isWave;
-    /// 0 default, 1 road, 2 building, 3 surfer, 4 obstacle
+    /// 0 default, 1 road/asphalt, 2 concrete (sidewalks), 3 surfer, 4 obstacle, 5 coin, 6 glass facade (buildings)
     float materialId;
-    float padding1;
-    float padding2;
+    float castsShadow;
+    float receivesShadow;
 } ObjectUniforms;
 
 #endif /* ShaderTypes_h */

@@ -1,0 +1,19 @@
+{
+  "sunDirection": [
+    0.7214837074279785,
+    0.3330482840538025,
+    0.6070750951766968
+  ],
+  "sunColor": [
+    1.0,
+    0.5930954217910767,
+    0.23142555356025696
+  ],
+  "sunIntensity": 2.8,
+  "iblIntensity": 1.15,
+  "irradiancePeak": 1.5808300971984863,
+  "specularMips": 5,
+  "shadowBias": 0.002,
+  "hdri": "sunset_jhbcentral",
+  "iblFormat": "rgba16f_ktx"
+}

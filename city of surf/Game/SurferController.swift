@@ -12,8 +12,7 @@ enum SurferPose {
 }
 
 struct SurferController {
-    static let laneXs: [Float] = [-3.4, 0, 3.4]
-    static let maxX: Float = 5.8
+    static let maxX: Float = 6.2
     static let jumpDuration: Float = 0.52
     static let jumpHeight: Float = 2.6
     static let duckDuration: Float = 0.38
@@ -38,9 +37,6 @@ struct SurferController {
         x = clamped
     }
 
-    mutating func applyFlick(_ meters: Float) {
-        setTargetX(targetX + meters)
-    }
 
     mutating func jump() {
         guard pose == .standing else { return }

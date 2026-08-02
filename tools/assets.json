@@ -1,0 +1,58 @@
+{
+  "runtime_dir": "city of surf/Resources/Lighting",
+  "cache_dir": "Assets/_cache",
+  "source_dir": "Assets",
+  "runtime_resolution": 2048,
+  "ibl": {
+    "cube_size": 128,
+    "irradiance_size": 32,
+    "specular_size": 64,
+    "specular_mips": 5,
+    "brdf_lut_size": 128
+  },
+  "assets": [
+    {
+      "key": "hdri_sunset_city",
+      "provider": "polyhaven",
+      "id": "sunset_jhbcentral",
+      "type": "hdri",
+      "resolution": "4k",
+      "formats": ["hdr", "jpg"],
+      "license": "CC0",
+      "credit": "Poly Haven — Joburg Central Sunset"
+    },
+    {
+      "key": "asphalt",
+      "provider": "ambientcg",
+      "id": "Asphalt033",
+      "search": "asphalt",
+      "type": "material",
+      "resolution": "4K",
+      "maps": ["Color", "NormalGL", "Roughness"],
+      "license": "CC0",
+      "credit": "ambientCG — Asphalt033"
+    },
+    {
+      "key": "concrete",
+      "provider": "ambientcg",
+      "id": "Concrete034",
+      "search": "concrete",
+      "type": "material",
+      "resolution": "4K",
+      "maps": ["Color", "NormalGL", "Roughness"],
+      "license": "CC0",
+      "credit": "ambientCG — Concrete034"
+    },
+    {
+      "key": "glass",
+      "provider": "ambientcg",
+      "id": "Facade001",
+      "search": "glass",
+      "type": "material",
+      "resolution": "4K",
+      "maps": ["Color", "NormalGL", "Roughness"],
+      "license": "CC0",
+      "credit": "ambientCG — Facade001 (glass facade)"
+    }
+  ]
+}

@@ -8,3 +8,7 @@ xcuserdata/
 # Metal / tooling
 *.air
 *.metallib
+
+# Raw asset downloads (runtime Lighting/ is committed)
+Assets/_cache/
+.venv/

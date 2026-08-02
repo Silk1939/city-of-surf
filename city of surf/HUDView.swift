@@ -46,6 +46,31 @@ struct HUDView: View {
             }
             .animation(.easeOut(duration: 0.15), value: gameState.collectPulse)
 
+            if gameState.showDebugHUD {
+                VStack(alignment: .leading, spacing: 2) {
+                    Spacer()
+                    Text("SMOKE platform=\(gameState.debugPlatformNote)")
+                    Text("device=\(gameState.debugMetalDeviceOK ? "OK" : "FAIL")  metal4=\(gameState.debugMetal4OK ? "OK" : "FAIL")")
+                    Text("renderer=\(gameState.debugRendererReady ? "OK" : "FAIL")  ktx=\(gameState.debugKTXLoaded ? "OK" : "FAIL")")
+                    Text("iblPeak=\(String(format: "%.2f", gameState.debugIBLPeak))  shadow=\(gameState.debugShadowActive ? "OK" : "FAIL")")
+                    Text("frame1=\(gameState.debugFirstFrameOK ? "OK" : "…")  FPS=\(gameState.debugFPS)")
+                    Text(String(format: "texMem≈%.0fMB%@", gameState.debugTextureMemoryMB, gameState.debugTextureMemoryWarn ? " WARN" : ""))
+                    if !gameState.debugLastError.isEmpty {
+                        Text("ERR: \(gameState.debugLastError)")
+                            .foregroundStyle(Color.red.opacity(0.95))
+                            .lineLimit(4)
+                    }
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                .padding(.leading, 12)
+                .padding(.trailing, 12)
+                .padding(.bottom, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .allowsHitTesting(false)
+            }
+
             if gameState.isGameOver {
                 Color.black.opacity(0.55).ignoresSafeArea()
                 VStack(spacing: 16) {

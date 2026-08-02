@@ -13,43 +13,41 @@ struct Coin {
 
 struct CoinSystem {
     var coins: [Coin] = []
-    private var spawnCursor: Float = 20
-    private let spacing: Float = 3.2
+    private var spawnCursor: Float = 12
+    private let spacing: Float = 2.4
 
     mutating func reset() {
         coins.removeAll()
-        spawnCursor = 18
+        spawnCursor = 8
         seedAhead()
     }
 
     private mutating func seedAhead() {
-        while spawnCursor < 220 {
+        while spawnCursor < 160 {
             spawnArc()
         }
     }
 
-    /// Curving coin line like the concept art.
     private mutating func spawnArc() {
+        if spawnCursor < 8 {
+            spawnCursor = 8
+        }
         let pattern = Int.random(in: 0...3)
-        let count = Int.random(in: 6...12)
-        let baseLane = Float.random(in: -4.5...4.5)
+        let count = Int.random(in: 7...12)
+        let baseX = Float.random(in: -4.0...4.0)
         for i in 0..<count {
             let t = Float(i) / Float(max(count - 1, 1))
             let x: Float
             switch pattern {
-            case 0: // straight
-                x = baseLane
-            case 1: // S-curve
-                x = baseLane + sin(t * .pi * 2) * 2.8
-            case 2: // sweep left->right
-                x = -4.2 + t * 8.4
-            default: // arc over center
-                x = sin((t - 0.5) * .pi) * 4.0
+            case 0: x = baseX
+            case 1: x = baseX + sin(t * .pi * 2) * 2.4
+            case 2: x = -3.8 + t * 7.6
+            default: x = sin((t - 0.5) * .pi) * 3.6
             }
-            coins.append(Coin(localZ: spawnCursor, x: max(-5.5, min(5.5, x))))
+            coins.append(Coin(localZ: spawnCursor, x: max(-5.4, min(5.4, x))))
             spawnCursor += spacing
         }
-        spawnCursor += Float.random(in: 6...16)
+        spawnCursor += Float.random(in: 4...10)
     }
 
     mutating func update(
@@ -60,32 +58,40 @@ struct CoinSystem {
         scrollZ: Float
     ) -> Int {
         var collected = 0
+        let sx = surfer.x
         for i in coins.indices {
             guard coins[i].active else { continue }
             let worldZ = coins[i].localZ - runDistance
-            if worldZ < -12 {
+            if worldZ < -8 {
                 coins[i].active = false
                 continue
             }
-            let y = wave.height(x: coins[i].x, z: worldZ, time: time, scrollZ: scrollZ) + 1.3
-            let pos = SIMD3(coins[i].x, y, worldZ)
-            let d = simd_length(pos - surfer.collisionCenter)
-            if d < 1.35 {
+            let dx = coins[i].x - sx
+            let dz = worldZ
+            // Generous XZ pickup cylinder.
+            if abs(dx) < 2.3 && abs(dz) < 2.8 {
                 coins[i].active = false
                 collected += 1
             }
         }
         coins.removeAll { !$0.active }
-        while coins.count < 40 || (coins.map(\.localZ).max() ?? 0) - runDistance < 160 {
+
+        if spawnCursor < runDistance + 30 {
+            spawnCursor = runDistance + 30
+        }
+        var guardCount = 0
+        while coins.count < 36 || (coins.map(\.localZ).max() ?? 0) - runDistance < 140 {
             spawnArc()
+            guardCount += 1
+            if guardCount > 20 { break }
         }
         return collected
     }
 
     func worldPosition(for coin: Coin, runDistance: Float, wave: WaveField, time: Float, scrollZ: Float) -> SIMD3<Float> {
         let worldZ = coin.localZ - runDistance
-        let bob = sin(time * 6.0 + coin.localZ) * 0.2
-        let y = wave.height(x: coin.x, z: worldZ, time: time, scrollZ: scrollZ) + 1.35 + bob
-        return SIMD3(coin.x, y, worldZ)
+        let bob = sin(time * 7.0 + coin.localZ) * 0.25
+        let water = wave.height(x: coin.x, z: worldZ, time: time, scrollZ: scrollZ)
+        return SIMD3(coin.x, water + 1.15 + bob, worldZ)
     }
 }

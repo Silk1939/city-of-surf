@@ -13,7 +13,23 @@ final class GameState: ObservableObject {
     @Published var coins: Int = 0
     @Published var isGameOver: Bool = false
     @Published var speed: Float = 18
-    @Published var justCollected: Bool = false
+    @Published var collectPulse: Float = 0
+
+    // Device smoke / first-run diagnostics (updated by GVC + Renderer).
+    // Keep showDebugHUD=true until first successful device run is confirmed.
+    @Published var showDebugHUD: Bool = true
+    @Published var debugMetalDeviceOK: Bool = false
+    @Published var debugMetal4OK: Bool = false
+    @Published var debugRendererReady: Bool = false
+    @Published var debugKTXLoaded: Bool = false
+    @Published var debugIBLPeak: Float = 0
+    @Published var debugShadowActive: Bool = false
+    @Published var debugFirstFrameOK: Bool = false
+    @Published var debugFPS: Int = 0
+    @Published var debugTextureMemoryMB: Float = 0
+    @Published var debugTextureMemoryWarn: Bool = false
+    @Published var debugLastError: String = ""
+    @Published var debugPlatformNote: String = "device"
 
     /// Combined run score shown in HUD.
     var score: Int { distanceScore + coins * 10 }
@@ -27,7 +43,6 @@ final class GameState: ObservableObject {
     private(set) var runDistance: Float = 0
     private(set) var scrollZ: Float = 0
     private(set) var wipeoutShake: Float = 0
-    private(set) var collectPulse: Float = 0
 
     private let baseSpeed: Float = 17
     private let maxSpeed: Float = 34
@@ -42,7 +57,6 @@ final class GameState: ObservableObject {
         isGameOver = false
         wipeoutShake = 0
         collectPulse = 0
-        justCollected = false
         surfer = SurferController()
         obstacles.reset()
         coinSystem.reset()
@@ -53,10 +67,6 @@ final class GameState: ObservableObject {
         surfer.setTargetX(x)
     }
 
-    func flick(meters: Float) {
-        guard !isGameOver else { return }
-        surfer.applyFlick(meters)
-    }
 
     func handleVertical(_ direction: SwipeDirection) {
         guard !isGameOver else { return }
@@ -97,11 +107,9 @@ final class GameState: ObservableObject {
         if gained > 0 {
             coins += gained
             collectPulse = 1
-            justCollected = true
-        } else {
-            justCollected = false
+        } else if collectPulse > 0 {
+            collectPulse = max(0, collectPulse - deltaTime * 3.5)
         }
-        collectPulse = max(0, collectPulse - deltaTime * 3.5)
 
         if obstacles.hitsSurfer(surfer, runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ) {
             isGameOver = true
@@ -109,9 +117,23 @@ final class GameState: ObservableObject {
         }
     }
 
-    func fillFrameUniforms(_ frame: inout FrameUniforms, viewProjection: matrix_float4x4, cameraPosition: SIMD3<Float>) {
+    func fillFrameUniforms(
+        _ frame: inout FrameUniforms,
+        viewProjection: matrix_float4x4,
+        invViewProjection: matrix_float4x4,
+        lightViewProjection: matrix_float4x4,
+        cameraPosition: SIMD3<Float>,
+        lighting: LightingConfig
+    ) {
         frame.viewProjectionMatrix = viewProjection
-        frame.lightDirection = simd_normalize(SIMD3<Float>(0.55, 0.55, 0.45))
+        frame.invViewProjectionMatrix = invViewProjection
+        frame.lightViewProjectionMatrix = lightViewProjection
+        frame.lightDirection = lighting.sunDirection
+        frame.lightColor = lighting.sunColor
+        frame.sunIntensity = lighting.sunIntensity
+        frame.iblIntensity = lighting.iblIntensity
+        frame.shadowBias = lighting.shadowBias
+        frame.specularMips = lighting.specularMips
         frame.time = time
         frame.waveAmplitude = wave.amplitude
         frame.waveLength = wave.wavelength

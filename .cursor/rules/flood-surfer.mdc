@@ -12,20 +12,31 @@ alwaysApply: true
 - Deployment: iOS 26+, Portrait, iPhone.
 - **No RealityKit** for this project.
 
+## Spec language → Metal 4 (do not introduce RealityKit)
+Older design notes may say `ImageBasedLightComponent`, `DirectionalLight`, or RealityKit PBR.
+In this codebase those mean:
+- **IBL** = offline-baked irradiance / prefiltered specular / BRDF LUT under `Resources/Lighting/`, sampled in `Shaders.metal`
+- **Directional light** = `FrameUniforms` sun direction/color/intensity from `lighting.json`
+- **Shadows** = `ShadowMap` depth pass + PCF in the fragment shaders
+- **PBR materials** = ambientCG albedo/normal/roughness textures (see `tools/fetch_assets.py`)
+
 ## Runtime
 - Metal 4 is **device-first**. Simulator is unsupported for runtime (symbols/API unreliable).
 - After meaningful code changes: `make build` (generic iOS device). Feel-test on a physical iPhone.
 - If Metal 4 is missing at runtime, fail with a clear on-screen message — do not silently no-op.
+- Screenshots for lighting QA come from the **device** (QuickTime / Xcode), not the Simulator.
 
 ## Architecture
 - One gameplay concern per file under `Game/` (WaveField, Surfer, Obstacles, Input, GameState).
 - Rendering helpers under `Render/`; Metal shaders in `Shaders.metal`.
 - Shared CPU/GPU types live in `ShaderTypes.h`.
-- **Wave height math must stay in sync**: `WaveField.swift` (CPU) and the Gerstner vertex shader (GPU) use the same parameters and formulas.
+- **Wave height math must stay in sync**: `WaveField.swift` (CPU) and the flood vertex shader (GPU) use the same parameters and formulas.
+- Lighting overview: `docs/RENDERING.md`.
 
 ## Assets
-- Graybox: procedural meshes only until the feel is validated.
-- Prefer CC0 sources later; keep license notes if adding third-party assets.
+- CC0 HDRI + PBR maps via `make fetch-assets` (`tools/assets.json` → `Assets/_cache` → `Resources/Lighting`).
+- Keep license notes in `CREDITS.md`.
+- Prefer small compile-checked render steps; do not change gameplay when doing lighting-only passes.
 
 ## Style
 - Match existing Swift/Metal style in the repo.

@@ -38,6 +38,9 @@ enum Math {
         ))
     }
 
+    /// Metal perspective: NDC depth maps near→0, far→1 (Metal convention).
+    /// Used with `invViewProjectionMatrix` sky rays (ndc.z = 0 and 1). Do not change
+    /// without a device frame capture — see docs/DEVICE_SMOKE_TEST.md.
     static func perspective(fovyRadians fovy: Float, aspectRatio: Float, nearZ: Float, farZ: Float) -> matrix_float4x4 {
         let ys = 1 / tanf(fovy * 0.5)
         let xs = ys / aspectRatio
@@ -60,6 +63,21 @@ enum Math {
             SIMD4(x.y, y.y, z.y, 0),
             SIMD4(x.z, y.z, z.z, 0),
             SIMD4(t.x, t.y, t.z, 1)
+        ))
+    }
+
+    static func orthographic(left: Float, right: Float, bottom: Float, top: Float, nearZ: Float, farZ: Float) -> matrix_float4x4 {
+        let ral = right + left
+        let rsl = right - left
+        let tab = top + bottom
+        let tsb = top - bottom
+        let fan = farZ + nearZ
+        let fsn = farZ - nearZ
+        return matrix_float4x4(columns: (
+            SIMD4(2 / rsl, 0, 0, 0),
+            SIMD4(0, 2 / tsb, 0, 0),
+            SIMD4(0, 0, -1 / fsn, 0),
+            SIMD4(-ral / rsl, -tab / tsb, -nearZ / fsn, 1)
         ))
     }
 

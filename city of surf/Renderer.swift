@@ -10,7 +10,7 @@ import simd
 import QuartzCore
 
 let maxBuffersInFlight = 3
-let maxObjectsPerFrame = 256
+let maxObjectsPerFrame = 320
 
 nonisolated enum RendererError: Error {
     case badVertexDescriptor
@@ -23,9 +23,14 @@ struct DrawItem {
     var color: SIMD4<Float>
     var isWave: Bool
     var materialId: Float
+    var castsShadow: Bool = false
+    var receivesShadow: Bool = true
 }
 
 final class Renderer: NSObject, MTKViewDelegate {
+
+    /// Last failed init reason for on-screen error (no silent black frame).
+    private(set) static var lastInitError: String?
 
     let device: MTLDevice
     weak var gameState: GameState?
@@ -46,40 +51,86 @@ final class Renderer: NSObject, MTKViewDelegate {
     var objectUniformBuffer: MTLBuffer
     var solidPipeline: MTLRenderPipelineState
     var wavePipeline: MTLRenderPipelineState
+    var shadowPipeline: MTLRenderPipelineState
+    var skyPipeline: MTLRenderPipelineState
     var depthState: MTLDepthStencilState
+    var skyDepthState: MTLDepthStencilState
 
     var uniformBufferIndex = 0
     var objectDrawCount = 0
 
     var camera = ChaseCamera()
     var aspect: Float = 1
+    var ibl: IBLTextures!
+    var shadowMap: ShadowMap!
 
     let unitBox: MTKMesh
     let waveMesh: MTKMesh
     let surferMesh: MTKMesh
 
     private var lastTime: CFTimeInterval = CACurrentMediaTime()
+    private var fpsAccum: Float = 0
+    private var fpsFrames: Int = 0
 
     @MainActor
     init?(metalKitView: MTKView, gameState: GameState) {
 #if targetEnvironment(simulator)
+        Self.lastInitError = "Simulator: Metal 4 wird nicht unterstützt."
         return nil
 #else
-        guard let device = metalKitView.device else { return nil }
+        func fail(_ message: String) {
+            Self.lastInitError = message
+            print("Renderer.init FAIL: \(message)")
+        }
+
+        Self.lastInitError = nil
+        guard let device = metalKitView.device else {
+            fail("Kein MTLDevice an MTKView")
+            return nil
+        }
         self.device = device
         self.gameState = gameState
 
-        self.commandQueue = device.makeMTL4CommandQueue()!
-        self.commandBuffer = device.makeCommandBuffer()!
-        self.commandAllocators = (0...maxBuffersInFlight).map { _ in device.makeCommandAllocator()! }
+        guard let queue = device.makeMTL4CommandQueue() else {
+            fail("makeMTL4CommandQueue fehlgeschlagen")
+            return nil
+        }
+        self.commandQueue = queue
+        guard let cmdBuf = device.makeCommandBuffer() else {
+            fail("makeCommandBuffer fehlgeschlagen")
+            return nil
+        }
+        self.commandBuffer = cmdBuf
+
+        var allocators: [MTL4CommandAllocator] = []
+        for i in 0...maxBuffersInFlight {
+            guard let a = device.makeCommandAllocator() else {
+                fail("makeCommandAllocator[\(i)] fehlgeschlagen")
+                return nil
+            }
+            allocators.append(a)
+        }
+        self.commandAllocators = allocators
 
         let argTableDesc = MTL4ArgumentTableDescriptor()
         argTableDesc.maxBufferBindCount = 4
-        self.vertexArgumentTable = try! device.makeArgumentTable(descriptor: argTableDesc)
-        argTableDesc.maxTextureBindCount = 1
-        self.fragmentArgumentTable = try! device.makeArgumentTable(descriptor: argTableDesc)
+        guard let vat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
+            fail("vertexArgumentTable fehlgeschlagen")
+            return nil
+        }
+        self.vertexArgumentTable = vat
+        argTableDesc.maxTextureBindCount = 8
+        guard let fat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
+            fail("fragmentArgumentTable fehlgeschlagen (maxTextureBindCount=8)")
+            return nil
+        }
+        self.fragmentArgumentTable = fat
 
-        self.endFrameEvent = device.makeSharedEvent()!
+        guard let sharedEvent = device.makeSharedEvent() else {
+            fail("makeSharedEvent fehlgeschlagen")
+            return nil
+        }
+        self.endFrameEvent = sharedEvent
         frameIndex = maxBuffersInFlight
         self.endFrameEvent.signaledValue = UInt64(frameIndex - 1)
 
@@ -87,6 +138,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let objectSize = alignedSize(MemoryLayout<ObjectUniforms>.size) * maxObjectsPerFrame * maxBuffersInFlight
         guard let fb = device.makeBuffer(length: frameSize, options: .storageModeShared),
               let ob = device.makeBuffer(length: objectSize, options: .storageModeShared) else {
+            fail("Uniform-Buffer Alloc fehlgeschlagen (frame=\(frameSize) object=\(objectSize))")
             return nil
         }
         frameUniformBuffer = fb
@@ -94,11 +146,29 @@ final class Renderer: NSObject, MTKViewDelegate {
         objectUniformBuffer = ob
         objectUniformBuffer.label = "ObjectUniforms"
 
+        // Struct layout smoke (CPU/GPU must match ShaderTypes.h).
+        let fu = MemoryLayout<FrameUniforms>.size
+        let ou = MemoryLayout<ObjectUniforms>.size
+        print("Renderer: FrameUniforms size=\(fu) ObjectUniforms size=\(ou) BufferIndex.frame=\(BufferIndex.frameUniforms.rawValue) object=\(BufferIndex.objectUniforms.rawValue)")
+
         metalKitView.depthStencilPixelFormat = .depth32Float_stencil8
         metalKitView.colorPixelFormat = .bgra8Unorm_srgb
         metalKitView.sampleCount = 1
-        // Dusk canyon sky
         metalKitView.clearColor = MTLClearColor(red: 0.95, green: 0.48, blue: 0.22, alpha: 1)
+
+        let loadedIBL: IBLTextures
+        do {
+            loadedIBL = try IBLLoader.load(device: device)
+        } catch {
+            fail(error.localizedDescription)
+            return nil
+        }
+        self.ibl = loadedIBL
+        guard let sm = ShadowMap(device: device, size: 2048) else {
+            fail("ShadowMap (depth32Float 2048) Alloc fehlgeschlagen")
+            return nil
+        }
+        self.shadowMap = sm
 
         let vd = Self.buildMetalVertexDescriptor()
 
@@ -119,16 +189,30 @@ final class Renderer: NSObject, MTKViewDelegate {
                 fragment: "waveFragment",
                 label: "Wave"
             )
+            shadowPipeline = try Self.buildShadowPipeline(device: device, vertexDescriptor: vd)
+            skyPipeline = try Self.buildSkyPipeline(device: device, metalKitView: metalKitView)
         } catch {
-            print("Pipeline error: \(error)")
+            fail("Pipeline: \(error.localizedDescription)")
             return nil
         }
 
         let depthDesc = MTLDepthStencilDescriptor()
         depthDesc.depthCompareFunction = .less
         depthDesc.isDepthWriteEnabled = true
-        guard let ds = device.makeDepthStencilState(descriptor: depthDesc) else { return nil }
+        guard let ds = device.makeDepthStencilState(descriptor: depthDesc) else {
+            fail("DepthStencilState (write) fehlgeschlagen")
+            return nil
+        }
         depthState = ds
+
+        let skyDepthDesc = MTLDepthStencilDescriptor()
+        skyDepthDesc.depthCompareFunction = .lessEqual
+        skyDepthDesc.isDepthWriteEnabled = false
+        guard let sds = device.makeDepthStencilState(descriptor: skyDepthDesc) else {
+            fail("DepthStencilState (sky, no write) fehlgeschlagen")
+            return nil
+        }
+        skyDepthState = sds
 
         do {
             unitBox = try MeshFactory.makeBox(
@@ -136,13 +220,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 dimensions: SIMD3(1, 1, 1),
                 vertexDescriptor: vd
             )
-            // Dense mesh: flood body behind + long face ahead of crest.
             waveMesh = try MeshFactory.makePlane(
                 device: device,
                 width: 30,
                 depth: 140,
-                segmentsX: 64,
-                segmentsZ: 180,
+                segmentsX: 40,
+                segmentsZ: 96,
                 vertexDescriptor: vd
             )
             surferMesh = try MeshFactory.makeBox(
@@ -151,27 +234,52 @@ final class Renderer: NSObject, MTKViewDelegate {
                 vertexDescriptor: vd
             )
         } catch {
-            print("Mesh error: \(error)")
+            fail("MeshFactory: \(error.localizedDescription)")
             return nil
         }
 
         let residencyDesc = MTLResidencySetDescriptor()
-        residencyDesc.initialCapacity = 64
-        let rs = try! device.makeResidencySet(descriptor: residencyDesc)
-        rs.addAllocations([frameUniformBuffer, objectUniformBuffer])
+        residencyDesc.initialCapacity = 128
+        guard let rs = try? device.makeResidencySet(descriptor: residencyDesc) else {
+            fail("makeResidencySet fehlgeschlagen")
+            return nil
+        }
+        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, shadowMap.texture])
         for mesh in [unitBox, waveMesh, surferMesh] {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
             rs.addAllocations(mesh.submeshes.map(\.indexBuffer.buffer))
         }
+        let texAllocs: [MTLTexture] = [
+            ibl.sky, ibl.irradiance, ibl.specular, ibl.brdfLUT,
+            ibl.asphalt.albedo, ibl.asphalt.normal, ibl.asphalt.roughness,
+            ibl.concrete.albedo, ibl.concrete.normal, ibl.concrete.roughness,
+            ibl.glass.albedo, ibl.glass.normal, ibl.glass.roughness,
+            ibl.solidWhite, ibl.flatNormal, ibl.midRoughness
+        ]
+        rs.addAllocations(texAllocs)
         rs.commit()
         commandQueue.addResidencySet(rs)
         residencySet = rs
 
         super.init()
         gameState.reset()
+        gameState.debugRendererReady = true
+        gameState.debugKTXLoaded = true
+        gameState.debugIBLPeak = ibl.config.irradiancePeak
+        gameState.debugShadowActive = true
+        let shadowBytes = shadowMap.size * shadowMap.size * 4
+        let totalBytes = ibl.approximateTextureBytes + shadowBytes
+        let mb = Float(totalBytes) / (1024 * 1024)
+        gameState.debugTextureMemoryMB = mb
+        // Soft budget for mid-range iPhones (KTX HDR + 2K PBR + shadow).
+        let warnMB: Float = 192
+        gameState.debugTextureMemoryWarn = mb > warnMB
+        if gameState.debugTextureMemoryWarn {
+            print("[FloodSurfer Smoke] WARN texture memory ≈ \(String(format: "%.1f", mb)) MB > \(Int(warnMB)) MB budget")
+        }
+        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) texMem≈\(String(format: "%.1f", mb))MB FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
 #endif
     }
-
     class func buildMetalVertexDescriptor() -> MTLVertexDescriptor {
         let vd = MTLVertexDescriptor()
         vd.attributes[VertexAttribute.position.rawValue].format = .float3
@@ -193,6 +301,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
 #if !targetEnvironment(simulator)
+    /// Metal 4: `MTL4RenderPipelineDescriptor` has no depth/stencil pixel-format fields
+    /// (unlike Metal 1–3). Depth comes from the render-pass attachment at encode time.
+    /// Color format is still declared here. Main pass: MTKView `.depth32Float_stencil8`.
+    /// Shadow pass: separate `.depth32Float` target via `ShadowMap.makeRenderPassDescriptor()`.
     @MainActor
     class func buildPipeline(
         device: MTLDevice,
@@ -202,6 +314,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         fragment: String,
         label: String
     ) throws -> MTLRenderPipelineState {
+        precondition(
+            metalKitView.depthStencilPixelFormat == .depth32Float_stencil8,
+            "MTKView depth/stencil must be depth32Float_stencil8"
+        )
         let library = device.makeDefaultLibrary()
         let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
 
@@ -220,6 +336,50 @@ final class Renderer: NSObject, MTKViewDelegate {
         pipelineDescriptor.vertexDescriptor = vertexDescriptor
         pipelineDescriptor.colorAttachments[0].pixelFormat = metalKitView.colorPixelFormat
 
+        return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
+    }
+
+    @MainActor
+    class func buildShadowPipeline(device: MTLDevice, vertexDescriptor: MTLVertexDescriptor) throws -> MTLRenderPipelineState {
+        let library = device.makeDefaultLibrary()
+        let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
+        let vDesc = MTL4LibraryFunctionDescriptor()
+        vDesc.library = library
+        vDesc.name = "shadowVertex"
+        let fDesc = MTL4LibraryFunctionDescriptor()
+        fDesc.library = library
+        fDesc.name = "shadowFragment"
+
+        let pipelineDescriptor = MTL4RenderPipelineDescriptor()
+        pipelineDescriptor.label = "Shadow"
+        pipelineDescriptor.vertexFunctionDescriptor = vDesc
+        pipelineDescriptor.fragmentFunctionDescriptor = fDesc
+        pipelineDescriptor.vertexDescriptor = vertexDescriptor
+        // Depth-only pass: format is the ShadowMap texture (.depth32Float) on the pass descriptor.
+        return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
+    }
+
+    @MainActor
+    class func buildSkyPipeline(device: MTLDevice, metalKitView: MTKView) throws -> MTLRenderPipelineState {
+        precondition(
+            metalKitView.depthStencilPixelFormat == .depth32Float_stencil8,
+            "MTKView depth/stencil must be depth32Float_stencil8"
+        )
+        let library = device.makeDefaultLibrary()
+        let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
+        let vDesc = MTL4LibraryFunctionDescriptor()
+        vDesc.library = library
+        vDesc.name = "skyVertex"
+        let fDesc = MTL4LibraryFunctionDescriptor()
+        fDesc.library = library
+        fDesc.name = "skyFragment"
+
+        let pipelineDescriptor = MTL4RenderPipelineDescriptor()
+        pipelineDescriptor.label = "Sky"
+        pipelineDescriptor.rasterSampleCount = metalKitView.sampleCount
+        pipelineDescriptor.vertexFunctionDescriptor = vDesc
+        pipelineDescriptor.fragmentFunctionDescriptor = fDesc
+        pipelineDescriptor.colorAttachments[0].pixelFormat = metalKitView.colorPixelFormat
         return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
 #endif
@@ -263,7 +423,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: model,
                 color: SIMD4(0.12, 0.12, 0.14, 1),
                 isWave: false,
-                materialId: 1
+                materialId: 1,
+                castsShadow: false,
+                receivesShadow: true
             ))
         }
 
@@ -275,28 +437,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 items.append(DrawItem(
                     mesh: unitBox,
                     modelMatrix: model,
-                    color: SIMD4(0.22, 0.22, 0.24, 1),
+                    color: SIMD4(0.85, 0.85, 0.88, 1),
                     isWave: false,
-                    materialId: 0
+                    materialId: 2,
+                    castsShadow: false,
+                    receivesShadow: true
                 ))
             }
-        }
-
-        // Buildings — denser canyon
-        let buildingSpacing: Float = 14
-        let base = -fmod(state.runDistance, buildingSpacing)
-        for i in 0..<16 {
-            let z = base + Float(i) * buildingSpacing - 8
-            let hL = 18 + Float((i * 3) % 9) * 3.5
-            let hR = 20 + Float((i * 5) % 8) * 3.8
-            let wL = 7.5 + Float(i % 3) * 0.8
-            let wR = 7.0 + Float((i + 1) % 3) * 0.9
-            let left = Math.translation(SIMD3(-12.5, hL * 0.5, z)) * Math.scale(SIMD3(wL, hL, 11))
-            let right = Math.translation(SIMD3(12.5, hR * 0.5, z)) * Math.scale(SIMD3(wR, hR, 11))
-            let tintL = SIMD4(0.28 + Float(i % 4) * 0.04, 0.30, 0.34, 1)
-            let tintR = SIMD4(0.26, 0.29 + Float(i % 3) * 0.03, 0.36, 1)
-            items.append(DrawItem(mesh: unitBox, modelMatrix: left, color: tintL, isWave: false, materialId: 2))
-            items.append(DrawItem(mesh: unitBox, modelMatrix: right, color: tintR, isWave: false, materialId: 2))
         }
 
         // One flood plane: crest near z=0, body behind (-), face ahead (+)
@@ -306,7 +453,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             modelMatrix: waveModel,
             color: SIMD4(0.1, 0.55, 0.65, 1),
             isWave: true,
-            materialId: 0
+            materialId: 0,
+            castsShadow: false,
+            receivesShadow: true
         ))
 
         // Surfer + board with lean
@@ -322,7 +471,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             modelMatrix: surferModel,
             color: SIMD4(0.12, 0.12, 0.12, 1),  // black suit
             isWave: false,
-            materialId: 3
+            materialId: 3,
+            castsShadow: true,
+            receivesShadow: true
         ))
         let accent = Math.translation(SIMD3(sp.x, sp.y + 0.15, sp.z - 0.05))
             * leanRot
@@ -332,7 +483,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             modelMatrix: accent,
             color: SIMD4(0.45, 0.98, 0.18, 1),
             isWave: false,
-            materialId: 3
+            materialId: 3,
+            castsShadow: true,
+            receivesShadow: true
         ))
         let boardY = sp.y - sh * 0.5 + 0.08
         let board = Math.translation(SIMD3(sp.x, boardY, sp.z))
@@ -343,8 +496,34 @@ final class Renderer: NSObject, MTKViewDelegate {
             modelMatrix: board,
             color: SIMD4(0.45, 0.95, 0.15, 1),
             isWave: false,
-            materialId: 3
+            materialId: 3,
+            castsShadow: true,
+            receivesShadow: true
         ))
+
+        // Coins early — never silently truncated by draw budget.
+        let spin = state.time * 4.0
+        for c in state.coinSystem.coins where c.active {
+            let pos = state.coinSystem.worldPosition(
+                for: c,
+                runDistance: state.runDistance,
+                wave: state.wave,
+                time: state.time,
+                scrollZ: state.scrollZ
+            )
+            let model = Math.translation(pos)
+                * Math.rotation(radians: spin + c.localZ, axis: SIMD3(0, 1, 0))
+                * Math.scale(SIMD3(1.15, 0.16, 1.15))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: model,
+                color: SIMD4(1.0, 0.84, 0.15, 1),
+                isWave: false,
+                materialId: 5,
+                castsShadow: false,
+                receivesShadow: true
+            ))
+        }
 
         // Obstacles — composed vehicles / props
         for o in state.obstacles.obstacles where o.active {
@@ -360,26 +539,22 @@ final class Renderer: NSObject, MTKViewDelegate {
             appendObstacle(items: &items, kind: o.kind, at: pos, roll: rot, yaw: yaw)
         }
 
-        // Coins
-        let spin = state.time * 4.0
-        for c in state.coinSystem.coins where c.active {
-            let pos = state.coinSystem.worldPosition(
-                for: c,
-                runDistance: state.runDistance,
-                wave: state.wave,
-                time: state.time,
-                scrollZ: state.scrollZ
-            )
-            let model = Math.translation(pos)
-                * Math.rotation(radians: spin + c.localZ, axis: SIMD3(0, 1, 0))
-                * Math.scale(SIMD3(0.85, 0.12, 0.85))
-            items.append(DrawItem(
-                mesh: unitBox,
-                modelMatrix: model,
-                color: SIMD4(1.0, 0.84, 0.15, 1),
-                isWave: false,
-                materialId: 5
-            ))
+        // Buildings last (lowest priority if budget ever tightens again)
+        let buildingSpacing: Float = 14
+        let base = -fmod(state.runDistance, buildingSpacing)
+        for i in 0..<12 {
+            let z = base + Float(i) * buildingSpacing - 8
+            let hL = 18 + Float((i * 3) % 9) * 3.5
+            let hR = 20 + Float((i * 5) % 8) * 3.8
+            let wL = 7.5 + Float(i % 3) * 0.8
+            let wR = 7.0 + Float((i + 1) % 3) * 0.9
+            let left = Math.translation(SIMD3(-12.5, hL * 0.5, z)) * Math.scale(SIMD3(wL, hL, 11))
+            let right = Math.translation(SIMD3(12.5, hR * 0.5, z)) * Math.scale(SIMD3(wR, hR, 11))
+            let tintL = SIMD4<Float>(1.0, 1.0, 1.0, 1)
+            let tintR = SIMD4<Float>(0.96, 0.97, 1.0, 1)
+            // materialId 6 = Facade001 glass/facade PBR (ambientCG)
+            items.append(DrawItem(mesh: unitBox, modelMatrix: left, color: tintL, isWave: false, materialId: 6, castsShadow: true, receivesShadow: true))
+            items.append(DrawItem(mesh: unitBox, modelMatrix: right, color: tintR, isWave: false, materialId: 6, castsShadow: true, receivesShadow: true))
         }
 
         return items
@@ -404,7 +579,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * yaw * Math.scale(SIMD3(2.0, 1.15, 4.0)),
                 color: bodyColor,
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
             // cabin
             items.append(DrawItem(
@@ -412,7 +589,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * yaw * Math.translation(SIMD3(0, 0.85, -0.2)) * Math.scale(SIMD3(1.7, 0.9, 2.2)),
                 color: SIMD4(0.15, 0.18, 0.22, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
             // light bar / taxi sign
             let roofColor: SIMD4<Float> = kind == .police
@@ -423,7 +602,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * yaw * Math.translation(SIMD3(0, 1.35, 0.1)) * Math.scale(SIMD3(1.1, 0.25, 0.7)),
                 color: roofColor,
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
         case .barrier:
             items.append(DrawItem(
@@ -431,14 +612,18 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * Math.scale(SIMD3(2.6, 1.0, 0.55)),
                 color: SIMD4(0.95, 0.45, 0.05, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
             items.append(DrawItem(
                 mesh: unitBox,
                 modelMatrix: base * Math.translation(SIMD3(0, 0.15, 0)) * Math.scale(SIMD3(2.6, 0.25, 0.58)),
                 color: SIMD4(0.1, 0.1, 0.1, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
         case .trafficLight:
             // pole
@@ -447,7 +632,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * Math.scale(SIMD3(0.28, 3.4, 0.28)),
                 color: SIMD4(0.18, 0.18, 0.2, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
             // head
             items.append(DrawItem(
@@ -455,7 +642,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * Math.translation(SIMD3(0, 1.7, 0)) * Math.scale(SIMD3(0.7, 1.4, 0.55)),
                 color: SIMD4(0.12, 0.12, 0.12, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
             // lamps
             items.append(DrawItem(
@@ -463,15 +652,68 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * Math.translation(SIMD3(0, 2.1, 0.28)) * Math.scale(SIMD3(0.35, 0.28, 0.2)),
                 color: SIMD4(0.95, 0.15, 0.1, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
             items.append(DrawItem(
                 mesh: unitBox,
                 modelMatrix: base * Math.translation(SIMD3(0, 1.7, 0.28)) * Math.scale(SIMD3(0.35, 0.28, 0.2)),
                 color: SIMD4(0.2, 0.9, 0.25, 1),
                 isWave: false,
-                materialId: 4
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
             ))
+        }
+    }
+
+    private func bindMaterialTextures(for item: DrawItem) {
+        let mat: PBRMaterialTextures
+        switch item.materialId {
+        case 0.5..<1.5:
+            mat = ibl.asphalt
+        case 1.5..<2.5:
+            mat = ibl.concrete
+        case 5.5..<6.5:
+            mat = ibl.glass
+        default:
+            // Intentional solids for surfer/obstacles/coins/wave — not a missing-asset fallback.
+            fragmentArgumentTable.setTexture(ibl.solidWhite.gpuResourceID, index: TextureIndex.albedo.rawValue)
+            fragmentArgumentTable.setTexture(ibl.flatNormal.gpuResourceID, index: TextureIndex.normal.rawValue)
+            fragmentArgumentTable.setTexture(ibl.midRoughness.gpuResourceID, index: TextureIndex.roughness.rawValue)
+            return
+        }
+        fragmentArgumentTable.setTexture(mat.albedo.gpuResourceID, index: TextureIndex.albedo.rawValue)
+        fragmentArgumentTable.setTexture(mat.normal.gpuResourceID, index: TextureIndex.normal.rawValue)
+        fragmentArgumentTable.setTexture(mat.roughness.gpuResourceID, index: TextureIndex.roughness.rawValue)
+    }
+
+    private func bindSharedLightingTextures() {
+        fragmentArgumentTable.setTexture(shadowMap.texture.gpuResourceID, index: TextureIndex.shadow.rawValue)
+        fragmentArgumentTable.setTexture(ibl.irradiance.gpuResourceID, index: TextureIndex.irradiance.rawValue)
+        fragmentArgumentTable.setTexture(ibl.specular.gpuResourceID, index: TextureIndex.specular.rawValue)
+        fragmentArgumentTable.setTexture(ibl.brdfLUT.gpuResourceID, index: TextureIndex.brdfLUT.rawValue)
+        fragmentArgumentTable.setTexture(ibl.sky.gpuResourceID, index: TextureIndex.sky.rawValue)
+    }
+
+    private func encodeMesh(_ item: DrawItem, encoder: MTL4RenderCommandEncoder) {
+        for (index, element) in item.mesh.vertexDescriptor.layouts.enumerated() {
+            guard let layout = element as? MDLVertexBufferLayout, layout.stride != 0 else { continue }
+            let buffer = item.mesh.vertexBuffers[index]
+            vertexArgumentTable.setAddress(
+                buffer.buffer.gpuAddress + UInt64(buffer.offset),
+                index: index
+            )
+        }
+        for submesh in item.mesh.submeshes {
+            encoder.drawIndexedPrimitives(
+                primitiveType: submesh.primitiveType,
+                indexCount: submesh.indexCount,
+                indexType: submesh.indexType,
+                indexBuffer: submesh.indexBuffer.buffer.gpuAddress + UInt64(submesh.indexBuffer.offset),
+                indexBufferLength: submesh.indexBuffer.buffer.length
+            )
         }
     }
 
@@ -486,6 +728,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         lastTime = now
 
         state.update(deltaTime: dt)
+        fpsAccum += dt
+        fpsFrames += 1
+        if fpsAccum >= 0.5 {
+            state.debugFPS = Int((Float(fpsFrames) / fpsAccum).rounded())
+            fpsAccum = 0
+            fpsFrames = 0
+        }
         camera.update(follow: state.surfer.position, lean: state.surfer.lean, shake: state.wipeoutShake, deltaTime: dt)
 
         let previousValueToWaitFor = frameIndex - maxBuffersInFlight
@@ -496,10 +745,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandAllocator.reset()
         commandBuffer.beginCommandBuffer(allocator: commandAllocator)
 
+        shadowMap.updateLightMatrix(sunDirection: ibl.config.sunDirection, focus: state.surfer.position + SIMD3(0, 4, 12))
+
         let viewM = camera.viewMatrix(follow: state.surfer.position)
         let projM = camera.projectionMatrix(aspect: aspect)
+        let viewProj = projM * viewM
         var frame = FrameUniforms()
-        state.fillFrameUniforms(&frame, viewProjection: projM * viewM, cameraPosition: camera.smoothEye)
+        state.fillFrameUniforms(
+            &frame,
+            viewProjection: viewProj,
+            invViewProjection: viewProj.inverse,
+            lightViewProjection: shadowMap.lightViewProjection,
+            cameraPosition: camera.smoothEye,
+            lighting: ibl.config
+        )
         frameUniformsPointer().pointee = frame
 
         let draws = buildDrawList(state: state)
@@ -510,49 +769,57 @@ final class Renderer: NSObject, MTKViewDelegate {
             obj.color = draws[i].color
             obj.isWave = draws[i].isWave ? 1 : 0
             obj.materialId = draws[i].materialId
+            obj.castsShadow = draws[i].castsShadow ? 1 : 0
+            obj.receivesShadow = draws[i].receivesShadow ? 1 : 0
             objectUniformsPointer(slot: i).pointee = obj
         }
-
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            fatalError("Failed to create render command encoder")
-        }
-
-        renderEncoder.label = "FloodSurfer"
-        renderEncoder.setCullMode(.back)
-        renderEncoder.setFrontFacing(.counterClockwise)
-        renderEncoder.setDepthStencilState(depthState)
-        renderEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
-        renderEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
 
         vertexArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
         fragmentArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
 
+        // --- Shadow pass ---
+        let shadowPass = shadowMap.makeRenderPassDescriptor()
+        if let shadowEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: shadowPass) {
+            shadowEncoder.label = "Shadow"
+            shadowEncoder.setCullMode(.front)
+            shadowEncoder.setFrontFacing(.counterClockwise)
+            shadowEncoder.setDepthStencilState(depthState)
+            shadowEncoder.setRenderPipelineState(shadowPipeline)
+            shadowEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
+            shadowEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+            for i in 0..<objectDrawCount where draws[i].castsShadow {
+                let objAddr = objectUniformsGPUAddress(slot: i)
+                vertexArgumentTable.setAddress(objAddr, index: BufferIndex.objectUniforms.rawValue)
+                encodeMesh(draws[i], encoder: shadowEncoder)
+            }
+            shadowEncoder.endEncoding()
+        }
+
+        // --- Main color pass ---
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            fatalError("Failed to create render command encoder")
+        }
+        renderEncoder.label = "FloodSurfer"
+        renderEncoder.setCullMode(.back)
+        renderEncoder.setFrontFacing(.counterClockwise)
+        renderEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
+        renderEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+        bindSharedLightingTextures()
+
+        // Sky first
+        renderEncoder.setDepthStencilState(skyDepthState)
+        renderEncoder.setRenderPipelineState(skyPipeline)
+        renderEncoder.drawPrimitives(primitiveType: .triangle, vertexStart: 0, vertexCount: 3)
+
+        renderEncoder.setDepthStencilState(depthState)
         for i in 0..<objectDrawCount {
             let item = draws[i]
             renderEncoder.setRenderPipelineState(item.isWave ? wavePipeline : solidPipeline)
-
             let objAddr = objectUniformsGPUAddress(slot: i)
             vertexArgumentTable.setAddress(objAddr, index: BufferIndex.objectUniforms.rawValue)
             fragmentArgumentTable.setAddress(objAddr, index: BufferIndex.objectUniforms.rawValue)
-
-            for (index, element) in item.mesh.vertexDescriptor.layouts.enumerated() {
-                guard let layout = element as? MDLVertexBufferLayout, layout.stride != 0 else { continue }
-                let buffer = item.mesh.vertexBuffers[index]
-                vertexArgumentTable.setAddress(
-                    buffer.buffer.gpuAddress + UInt64(buffer.offset),
-                    index: index
-                )
-            }
-
-            for submesh in item.mesh.submeshes {
-                renderEncoder.drawIndexedPrimitives(
-                    primitiveType: submesh.primitiveType,
-                    indexCount: submesh.indexCount,
-                    indexType: submesh.indexType,
-                    indexBuffer: submesh.indexBuffer.buffer.gpuAddress + UInt64(submesh.indexBuffer.offset),
-                    indexBufferLength: submesh.indexBuffer.buffer.length
-                )
-            }
+            bindMaterialTextures(for: item)
+            encodeMesh(item, encoder: renderEncoder)
         }
 
         renderEncoder.endEncoding()
@@ -565,6 +832,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandQueue.signalEvent(endFrameEvent, value: UInt64(frameIndex))
         frameIndex += 1
         drawable.present()
+        if !state.debugFirstFrameOK {
+            state.debugFirstFrameOK = true
+            print("[FloodSurfer Smoke] CHECK OK: first frame presented")
+        }
 #endif
     }
 
