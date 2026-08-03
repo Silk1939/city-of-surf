@@ -653,10 +653,13 @@ typedef struct
 
 vertex PostOut postVertex(uint vid [[vertex_id]])
 {
+    // Cover clip space; Metal RT origin is top-left, so flip V when sampling
+    // a previously rendered color target into another pass / drawable.
     float2 positions[3] = { float2(-1, -1), float2(3, -1), float2(-1, 3) };
     PostOut out;
     out.position = float4(positions[vid], 0.0, 1.0);
-    out.uv = positions[vid] * 0.5 + 0.5;
+    float2 uv = positions[vid] * 0.5 + 0.5;
+    out.uv = float2(uv.x, 1.0 - uv.y);
     return out;
 }
 

@@ -11,6 +11,8 @@ import QuartzCore
 
 let maxBuffersInFlight = 3
 let maxObjectsPerFrame = 420
+/// Keep false until device is stable without green/white block glitches.
+let enableBloomChain = false
 
 nonisolated enum RendererError: Error {
     case badVertexDescriptor
@@ -69,6 +71,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var objectDrawCount = 0
     var postFXUniformBuffer: MTLBuffer
     var hdrPipeline: HDRPipeline!
+    /// 1×1 black HDR tex for composite bloom bind when bloom chain is off.
+    var blackBloomTexture: MTLTexture!
 
     var camera = ChaseCamera()
     var aspect: Float = 1
@@ -192,12 +196,36 @@ final class Renderer: NSObject, MTKViewDelegate {
             return nil
         }
         self.ibl = loadedIBL
-        guard let sm = ShadowMap(device: device, size: 2048) else {
+        // Single HDR/shadow slot: 3× full-res rgba16Float blew residency/memory → green blocks.
+        guard let sm = ShadowMap(device: device, size: 2048, slotCount: 1) else {
             fail("ShadowMap (depth32Float 2048) Alloc fehlgeschlagen")
             return nil
         }
         self.shadowMap = sm
-        self.hdrPipeline = HDRPipeline(device: device)
+        self.hdrPipeline = HDRPipeline(device: device, slotCount: 1)
+
+        let blackDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float,
+            width: 1,
+            height: 1,
+            mipmapped: false
+        )
+        blackDesc.usage = [.shaderRead]
+        blackDesc.storageMode = .shared
+        guard let blackTex = device.makeTexture(descriptor: blackDesc) else {
+            fail("blackBloomTexture Alloc fehlgeschlagen")
+            return nil
+        }
+        blackTex.label = "BlackBloom"
+        // rgba16Float texels are IEEE half — write zeros (0.0h), not Float32.
+        var blackHalf = [UInt16](repeating: 0, count: 4)
+        blackTex.replace(
+            region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0), size: MTLSize(width: 1, height: 1, depth: 1)),
+            mipmapLevel: 0,
+            withBytes: &blackHalf,
+            bytesPerRow: MemoryLayout<UInt16>.stride * 4
+        )
+        self.blackBloomTexture = blackTex
 
         let vd = Self.buildMetalVertexDescriptor()
         let hdrFormat: MTLPixelFormat = .rgba16Float
@@ -350,7 +378,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             fail("makeResidencySet fehlgeschlagen")
             return nil
         }
-        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, postFXUniformBuffer])
+        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, postFXUniformBuffer, blackBloomTexture])
         rs.addAllocations(shadowMap.allTextures)
         residentHDRTextures = hdrPipeline.allTextures
         rs.addAllocations(residentHDRTextures)
@@ -377,7 +405,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         gameState.debugIBLPeak = ibl.config.irradiancePeak
         gameState.debugShadowActive = true
         updateTextureMemoryEstimate(gameState: gameState)
-        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) HDR=\(hdrPipeline.width)x\(hdrPipeline.height) bloom=\(ArtDirection.bloomIntensity) FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
+        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) HDR=\(hdrPipeline.width)x\(hdrPipeline.height) bloomChain=\(enableBloomChain) FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
 #endif
     }
 
@@ -1124,12 +1152,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             deltaTime: dt
         )
 
-        // CPU must not overwrite in-flight uniform / allocator / RT slots.
-        waitForInFlightFrameSlot()
+        // Serialize GPU work onto one HDR/shadow target (no in-flight RT races).
+        let previousValueToWaitFor = frameIndex - 1
+        if !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10) {
+            print("[FloodSurfer] WARN: frame wait timeout (target=\(previousValueToWaitFor)) — blocking")
+            while !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 1000) {
+                print("[FloodSurfer] WARN: still waiting for GPU frame \(previousValueToWaitFor)")
+            }
+        }
 
         uniformBufferIndex = (uniformBufferIndex + 1) % maxBuffersInFlight
-        hdrPipeline.setActiveSlot(uniformBufferIndex)
-        shadowMap.setActiveSlot(uniformBufferIndex)
+        hdrPipeline.setActiveSlot(0)
+        shadowMap.setActiveSlot(0)
 
         let commandAllocator = commandAllocators[uniformBufferIndex]
         commandAllocator.reset()
@@ -1224,16 +1258,25 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         renderEncoder.endEncoding()
 
-        // --- Bloom: extract → blur → 2× downsample/blur → additive upsample ---
-        encodeBloomChain(time: state.time)
+        // Bloom optional — off until green-block glitches are gone on device.
+        if enableBloomChain {
+            encodeBloomChain(time: state.time)
+        }
 
         // --- Composite into drawable (ACES + grade + grain) ---
         guard let compositeEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             fatalError("Failed to create composite encoder")
         }
-        writePostFX(time: state.time, blurDirection: .zero, texelSize: .zero)
+        var post = PostFXUniforms()
+        HDRPipeline.fillPostFX(&post, time: state.time, blurDirection: .zero, texelSize: .zero)
+        if !enableBloomChain {
+            post.bloomIntensity = 0
+        }
+        postFXUniformsPointer().pointee = post
+        fragmentArgumentTable.setAddress(postFXUniformsGPUAddress(), index: BufferIndex.postFXUniforms.rawValue)
         fragmentArgumentTable.setTexture(hdrPipeline.sceneColor.gpuResourceID, index: TextureIndex.albedo.rawValue)
-        fragmentArgumentTable.setTexture(hdrPipeline.bloomMips[0].gpuResourceID, index: TextureIndex.normal.rawValue)
+        let bloomTex = enableBloomChain ? hdrPipeline.bloomMips[0] : blackBloomTexture!
+        fragmentArgumentTable.setTexture(bloomTex.gpuResourceID, index: TextureIndex.normal.rawValue)
         encodeFullscreen(compositeEncoder, pipeline: compositePipeline, label: "Composite")
         compositeEncoder.endEncoding()
 

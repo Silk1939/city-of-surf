@@ -113,10 +113,7 @@ final class HDRPipeline {
         rp.depthAttachment.loadAction = .clear
         rp.depthAttachment.storeAction = .dontCare
         rp.depthAttachment.clearDepth = 1.0
-        rp.stencilAttachment.texture = sceneDepth
-        rp.stencilAttachment.loadAction = .clear
-        rp.stencilAttachment.storeAction = .dontCare
-        rp.stencilAttachment.clearStencil = 0
+        // No stencil ops — avoid undefined stencil paths on depth32Float_stencil8.
         return rp
     }
 
