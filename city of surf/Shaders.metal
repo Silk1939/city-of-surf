@@ -25,6 +25,8 @@ typedef struct
     float foam;
     float materialId;
     float4 shadowCoord;
+    float4 color;
+    float receivesShadow;
 } VOut;
 
 typedef struct
@@ -364,9 +366,9 @@ fragment float4 skyFragment(SkyOut in [[stage_in]],
     return float4(col, 1.0);
 }
 
-vertex VOut solidVertex(Vertex in [[stage_in]],
-                        constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
-                        constant ObjectUniforms &object [[buffer(BufferIndexObjectUniforms)]])
+static VOut solidVertexCommon(Vertex in,
+                              constant FrameUniforms &frame,
+                              constant ObjectUniforms &object)
 {
     VOut out;
     float4 world = object.modelMatrix * float4(in.position, 1.0);
@@ -375,6 +377,8 @@ vertex VOut solidVertex(Vertex in [[stage_in]],
     out.texCoord = in.texCoord;
     out.foam = 0.0;
     out.materialId = object.materialId;
+    out.color = object.color;
+    out.receivesShadow = object.receivesShadow;
 
     float3x3 normalMatrix = float3x3(object.modelMatrix[0].xyz,
                                      object.modelMatrix[1].xyz,
@@ -387,6 +391,35 @@ vertex VOut solidVertex(Vertex in [[stage_in]],
     out.normal = normalize(normalMatrix * nLocal);
     out.shadowCoord = shadowCoordWithNormalOffset(
         world.xyz, out.normal, frame.lightDirection, frame, 0.06);
+    return out;
+}
+
+vertex VOut solidVertex(Vertex in [[stage_in]],
+                        constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+                        constant ObjectUniforms &object [[buffer(BufferIndexObjectUniforms)]])
+{
+    return solidVertexCommon(in, frame, object);
+}
+
+/// Instanced solids — one draw, many ObjectUniforms in BufferIndexInstanceUniforms.
+vertex VOut solidInstancedVertex(Vertex in [[stage_in]],
+                                 constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+                                 constant ObjectUniforms *instances [[buffer(BufferIndexInstanceUniforms)]],
+                                 uint iid [[instance_id]])
+{
+    return solidVertexCommon(in, frame, instances[iid]);
+}
+
+vertex ShadowOut shadowInstancedVertex(Vertex in [[stage_in]],
+                                       constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+                                       constant ObjectUniforms *instances [[buffer(BufferIndexInstanceUniforms)]],
+                                       uint iid [[instance_id]])
+{
+    constant ObjectUniforms &object = instances[iid];
+    ShadowOut out;
+    float4 world = object.modelMatrix * float4(in.position, 1.0);
+    out.worldPos = world.xyz;
+    out.position = frame.lightViewProjectionMatrix * world;
     return out;
 }
 
@@ -414,20 +447,20 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         uv = (abs(N.x) > abs(N.z)) ? in.worldPos.zy * 0.08 : in.worldPos.xy * 0.08;
     }
 
-    float3 albedo = object.color.rgb;
+    float3 albedo = in.color.rgb;
     float roughness = 0.65;
     float metallic = 0.0;
 
-    bool usePBR = (object.materialId > 0.5 && object.materialId < 2.5) || object.materialId > 5.5;
+    bool usePBR = (in.materialId > 0.5 && in.materialId < 2.5) || in.materialId > 5.5;
     if (usePBR) {
-        albedo = albedoMap.sample(matSampler, uv).rgb * object.color.rgb;
+        albedo = albedoMap.sample(matSampler, uv).rgb * in.color.rgb;
         float3 nSample = normalMap.sample(matSampler, uv).rgb;
         N = applyNormalMap(N, nSample, in.worldPos, uv);
         roughness = roughnessMap.sample(matSampler, uv).r;
     }
 
     // Road wetness + sunset glitter path down the street center
-    if (object.materialId > 0.5 && object.materialId < 1.5) {
+    if (in.materialId > 0.5 && in.materialId < 1.5) {
         float center = 1.0 - smoothstep(0.08, 0.22, abs(in.worldPos.x));
         float dash = step(0.45, fract(in.worldPos.z * 0.1));
         albedo = mix(albedo, float3(0.95, 0.9, 0.55), center * dash * 0.35);
@@ -440,9 +473,9 @@ fragment float4 solidFragment(VOut in [[stage_in]],
 
     // Glass/facade buildings (materialId 6): warm stylized facades + HDR window glow
     float windowEmit = 0.0;
-    if (object.materialId > 5.5 && object.materialId < 6.5) {
+    if (in.materialId > 5.5 && in.materialId < 6.5) {
         // Prefer art-directed tint over gray PBR albedo.
-        albedo = mix(albedo, object.color.rgb, 0.82);
+        albedo = mix(albedo, in.color.rgb, 0.82);
         roughness = clamp(roughness * 0.7, 0.12, 0.55);
         metallic = 0.08;
         float sunFacing = saturate(dot(N, L));
@@ -458,30 +491,35 @@ fragment float4 solidFragment(VOut in [[stage_in]],
     }
 
     // Sidewalks / concrete slabs — no building window grid.
-    if (object.materialId > 1.5 && object.materialId < 2.5) {
-        albedo = mix(albedo, object.color.rgb, 0.35);
+    if (in.materialId > 1.5 && in.materialId < 2.5) {
+        albedo = mix(albedo, in.color.rgb, 0.35);
         roughness = clamp(roughness * 0.9, 0.35, 0.85);
         metallic = 0.0;
     }
 
     // Coins — hot gold emissive disks
-    if (object.materialId > 4.5 && object.materialId < 5.5) {
-        albedo = object.color.rgb;
+    if (in.materialId > 4.5 && in.materialId < 5.5) {
+        albedo = in.color.rgb;
         roughness = 0.12;
         metallic = 0.95;
-    } else if (object.materialId > 2.5 && object.materialId < 3.5) {
-        // Surfer / board / neon — stylized, not gray PBR
-        albedo = object.color.rgb;
+    } else if (in.materialId > 2.5 && in.materialId < 3.5) {
+        // Surfer / neon — stylized, not gray PBR
+        albedo = in.color.rgb;
         roughness = 0.28;
         metallic = 0.2;
-    } else if (object.materialId > 3.5 && object.materialId < 4.5) {
+    } else if (in.materialId > 6.5 && in.materialId < 7.5) {
+        // Wet surfboard — controlled gloss, no neon emissive flood
+        albedo = in.color.rgb;
+        roughness = 0.11;
+        metallic = 0.35;
+    } else if (in.materialId > 3.5 && in.materialId < 4.5) {
         roughness = 0.45;
         metallic = 0.2;
-        albedo = mix(albedo, object.color.rgb, 0.85);
+        albedo = mix(albedo, in.color.rgb, 0.85);
     }
 
     float shadow = 1.0;
-    if (object.receivesShadow > 0.5) {
+    if (in.receivesShadow > 0.5) {
         shadow = shadowPCF(in.shadowCoord, shadowMap, shadowSampler, frame.shadowBias, N, L);
         shadow = mix(0.6, 1.0, shadow);
     }
@@ -510,32 +548,39 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         color += float3(1.0, 0.78, 0.35) * windowEmit * 4.0;
     }
     // Warm sunset rim on building edges (flat front-above sun).
-    if (object.materialId > 5.5 && object.materialId < 6.5) {
+    if (in.materialId > 5.5 && in.materialId < 6.5) {
         float rim = pow(1.0 - saturate(dot(N, V)), 2.4);
         float sunGlancing = saturate(1.0 - abs(dot(N, L)));
         color += frame.lightColor * rim * sunGlancing * frame.sunIntensity * 0.12;
     }
-    if (object.materialId > 2.5 && object.materialId < 3.5) {
+    if (in.materialId > 2.5 && in.materialId < 3.5) {
         float rim = pow(1.0 - saturate(dot(N, V)), 2.0);
-        float3 rimCol = mix(float3(0.220, 0.898, 1.0), object.color.rgb, 0.45); // neon cyan
+        float3 rimCol = mix(float3(0.220, 0.898, 1.0), in.color.rgb, 0.45); // neon cyan
         color += rimCol * rim * 3.5;
-        color += object.color.rgb * 2.2;
+        color += in.color.rgb * 2.2;
     }
-    if (object.materialId > 4.5 && object.materialId < 5.5) {
+    if (in.materialId > 6.5 && in.materialId < 7.5) {
+        // Wet deck sparkle — narrow, secondary to sun (not bloom food).
+        float glint = pow(saturate(dot(N, normalize(L + V))), 96.0);
+        color += float3(0.85, 0.95, 1.0) * glint * 2.4;
+        float fres = pow(1.0 - saturate(dot(N, V)), 3.0);
+        color += float3(0.35, 0.55, 0.65) * fres * 0.45;
+    }
+    if (in.materialId > 4.5 && in.materialId < 5.5) {
         float pulse = 0.55 + 0.45 * sin(frame.time * 7.0 + in.worldPos.x * 2.0);
-        color += object.color.rgb * pulse * 4.0;
+        color += in.color.rgb * pulse * 4.0;
         float rim = pow(1.0 - saturate(dot(N, V)), 1.4);
         color += float3(1.0, 0.92, 0.35) * rim * 3.0;
         float glint = pow(saturate(dot(N, normalize(L + V))), 64.0);
         color += float3(1.0, 0.95, 0.6) * glint * 5.5;
     }
     // Traffic-light / hazard / billboard neon (magenta/cyan sparingly)
-    if (object.materialId > 3.5 && object.materialId < 4.5) {
-        float chroma = max(object.color.r, max(object.color.g, object.color.b))
-                     - min(object.color.r, min(object.color.g, object.color.b));
+    if (in.materialId > 3.5 && in.materialId < 4.5) {
+        float chroma = max(in.color.r, max(in.color.g, in.color.b))
+                     - min(in.color.r, min(in.color.g, in.color.b));
         if (chroma > 0.35) {
             float pulse = 0.7 + 0.3 * sin(frame.time * 8.0);
-            color += object.color.rgb * pulse * 3.5;
+            color += in.color.rgb * pulse * 3.5;
         }
     }
 
@@ -557,6 +602,8 @@ vertex VOut waveVertex(Vertex in [[stage_in]],
     out.texCoord = in.texCoord;
     out.foam = foam;
     out.materialId = 0.0;
+    out.color = object.color;
+    out.receivesShadow = 0.0;
     out.shadowCoord = shadowCoordWithNormalOffset(
         displaced, out.normal, frame.lightDirection, frame, 0.18);
     return out;

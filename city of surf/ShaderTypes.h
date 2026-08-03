@@ -22,7 +22,8 @@ typedef NS_ENUM(EnumBackingType, BufferIndex)
     BufferIndexMeshGenerics  = 1,
     BufferIndexFrameUniforms = 2,
     BufferIndexObjectUniforms = 3,
-    BufferIndexPostFXUniforms = 4
+    BufferIndexPostFXUniforms = 4,
+    BufferIndexInstanceUniforms = 5
 };
 
 typedef NS_ENUM(EnumBackingType, VertexAttribute)
@@ -92,7 +93,8 @@ typedef struct
     matrix_float4x4 modelMatrix;
     simd_float4 color;
     float isWave;
-    /// 0 default, 1 road/asphalt, 2 concrete (sidewalks), 3 surfer, 4 obstacle, 5 coin, 6 glass facade (buildings)
+    /// 0 default, 1 road/asphalt, 2 concrete (sidewalks), 3 surfer/neon, 4 obstacle,
+    /// 5 coin, 6 glass facade (buildings), 7 wet surfboard (glossy, non-emissive)
     float materialId;
     float castsShadow;
     float receivesShadow;

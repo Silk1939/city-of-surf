@@ -21,9 +21,9 @@ enum ArtDirection {
     static let crestSSSIntensity: Float = 2.5
     /// Narrow sun glitter HDR scale on water.
     static let waterGlitterIntensity: Float = 8.0
-    /// GPU-only detail wave amps (must stay < 0.15; not in WaveField).
-    static let waterDetailAmp0: Float = 0.09
-    static let waterDetailAmp1: Float = 0.05
+    /// GPU-only detail wave amps (must stay small vs gameplay amplitude; not in WaveField).
+    static let waterDetailAmp0: Float = 0.12
+    static let waterDetailAmp1: Float = 0.07
 
     // MARK: - Buildings
     static let buildingSun = SIMD3<Float>(0.788, 0.635, 0.494)      // #C9A27E

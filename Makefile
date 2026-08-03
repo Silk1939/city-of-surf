@@ -7,7 +7,12 @@ export DEVELOPER_DIR := /Applications/Xcode.app/Contents/Developer
 
 DEVICE_DEST ?= generic/platform=iOS
 APP := $(DERIVED)/Build/Products/$(CONFIG)-iphoneos/$(SCHEME).app
-SIGN_IDENTITY ?= Apple Development: tanipekkaya@web.de (H85K4W2G74)
+# Prefer explicit env (SIGN_IDENTITY / CODESIGN_IDENTITY). Otherwise pick the first
+# local "Apple Development" identity from the keychain — never hardcode a person.
+SIGN_IDENTITY ?= $(CODESIGN_IDENTITY)
+ifeq ($(strip $(SIGN_IDENTITY)),)
+SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)
+endif
 ENTITLEMENTS := city of surf/FloodSurfer.entitlements
 
 .PHONY: build device-build run-device clean list-devices metal-toolchain sign fetch-assets
@@ -43,6 +48,14 @@ device-build:
 
 sign:
 	@test -d "$(APP)" || (echo "Missing app: $(APP)"; exit 1)
+	@if [ -z "$(SIGN_IDENTITY)" ]; then \
+		echo "ERROR: SIGN_IDENTITY is not set."; \
+		echo "Set a local codesign identity before signing, e.g.:"; \
+		echo "  export SIGN_IDENTITY=\"Apple Development: you@example.com (TEAMID)\""; \
+		echo "  make device-build"; \
+		echo "Or: make sign SIGN_IDENTITY=\"Apple Development: …\""; \
+		exit 1; \
+	fi
 	@# Documents/iCloud adds FinderInfo + fileprovider xattrs that break codesign.
 	@# ditto --norsrc --noextattr produces a signable copy.
 	@rm -rf "$(APP).clean"

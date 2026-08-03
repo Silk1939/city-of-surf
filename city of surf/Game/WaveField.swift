@@ -4,19 +4,20 @@
 //
 //  Single flood-front height field — must match Shaders.metal.
 //
-//  Stabilization baseline (2026-08-03): keep camera / city / sky readable.
-//  Giant art-ref wave comes later with matching camera + sky steps.
+//  Stabilization + Phase 7 scale: amplitude≈5.2 with matching ChaseCamera offsets.
+//  Giant crest must stay readable with city / sky; camera snaps above water on reset.
 //
 
 import simd
 
 struct WaveField {
-    var amplitude: Float = 2.4
-    var faceWidth: Float = 9.0
+    /// Dramatic flood crest — keep in sync with ChaseCamera eyeOffset / lookAhead.
+    var amplitude: Float = 5.2
+    var faceWidth: Float = 14.0
     var speed: Float = 16.0
-    var steepness: Float = 0.55
+    var steepness: Float = 0.62
     var direction: SIMD2<Float> = SIMD2(0, 1)
-    var rippleAmplitude: Float = 0.12
+    var rippleAmplitude: Float = 0.14
     var rippleLength: Float = 5.0
     /// Crest alignment relative to surfer; 0 = crest at player Z.
     var crestShift: Float = 0

@@ -13,9 +13,10 @@ final class GameState: ObservableObject {
     @Published var coins: Int = 0
     @Published var isGameOver: Bool = false
     @Published var collectPulse: Float = 0
-    /// Internal combo for bonus scoring — not shown on HUD during stabilization.
+    /// Style-clear flash for HUD (jump/duck near-miss).
+    @Published var stylePulse: Float = 0
+    /// Internal combo for bonus scoring.
     private(set) var combo: Int = 0
-    private(set) var stylePulse: Float = 0
     private(set) var speed: Float = 18
 
     // Device smoke / first-run diagnostics (updated by GVC + Renderer).
