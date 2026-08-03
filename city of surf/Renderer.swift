@@ -108,6 +108,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             return nil
         }
         self.commandQueue = queue
+        // Metal 4: one long-lived reusable command buffer; memory comes from per-frame allocators.
         guard let cmdBuf = device.makeCommandBuffer() else {
             fail("makeCommandBuffer fehlgeschlagen")
             return nil
@@ -115,7 +116,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.commandBuffer = cmdBuf
 
         var allocators: [MTL4CommandAllocator] = []
-        for i in 0...maxBuffersInFlight {
+        for i in 0..<maxBuffersInFlight {
             guard let a = device.makeCommandAllocator() else {
                 fail("makeCommandAllocator[\(i)] fehlgeschlagen")
                 return nil
@@ -339,7 +340,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             fail("makeResidencySet fehlgeschlagen")
             return nil
         }
-        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, postFXUniformBuffer, shadowMap.texture])
+        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, postFXUniformBuffer])
+        rs.addAllocations(shadowMap.allTextures)
         rs.addAllocations(hdrPipeline.allTextures)
         for mesh in [unitBox, waveMesh, surferMesh, coinMesh] {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
@@ -369,8 +371,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func updateTextureMemoryEstimate(gameState: GameState) {
-        let shadowBytes = shadowMap.size * shadowMap.size * 4
-        let totalBytes = ibl.approximateTextureBytes + shadowBytes + hdrPipeline.approximateTextureBytes
+        let totalBytes = ibl.approximateTextureBytes
+            + shadowMap.approximateTextureBytes
+            + hdrPipeline.approximateTextureBytes
         let mb = Float(totalBytes) / (1024 * 1024)
         gameState.debugTextureMemoryMB = mb
         let warnMB: Float = 128
@@ -1055,6 +1058,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let state = gameState else { return }
         guard let drawable = view.currentDrawable else { return }
         guard let renderPassDescriptor = view.currentMTL4RenderPassDescriptor else { return }
+        configureDrawablePass(renderPassDescriptor, clearColor: view.clearColor)
 
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTime, 1.0 / 20.0))
@@ -1095,12 +1099,16 @@ final class Renderer: NSObject, MTKViewDelegate {
             deltaTime: dt
         )
 
-        let previousValueToWaitFor = frameIndex - maxBuffersInFlight
-        endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10)
+        // CPU must not overwrite in-flight uniform / allocator / RT slots.
+        waitForInFlightFrameSlot()
 
         uniformBufferIndex = (uniformBufferIndex + 1) % maxBuffersInFlight
+        hdrPipeline.setActiveSlot(uniformBufferIndex)
+        shadowMap.setActiveSlot(uniformBufferIndex)
+
         let commandAllocator = commandAllocators[uniformBufferIndex]
         commandAllocator.reset()
+        // Reuse the single MTL4CommandBuffer; allocator provides per-frame backing memory.
         commandBuffer.beginCommandBuffer(allocator: commandAllocator)
 
         shadowMap.updateLightMatrix(
@@ -1123,6 +1131,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         frameUniformsPointer().pointee = frame
 
         let draws = buildDrawList(state: state)
+        if draws.count > maxObjectsPerFrame {
+            print("[FloodSurfer] ASSERT object count \(draws.count) > maxObjectsPerFrame \(maxObjectsPerFrame) — clamping")
+            assertionFailure("objectDrawCount exceeded maxObjectsPerFrame")
+        }
         objectDrawCount = min(draws.count, maxObjectsPerFrame)
         for i in 0..<objectDrawCount {
             var obj = ObjectUniforms()
@@ -1209,6 +1221,40 @@ final class Renderer: NSObject, MTKViewDelegate {
         if !state.debugFirstFrameOK {
             state.debugFirstFrameOK = true
             print("[FloodSurfer Smoke] CHECK OK: first frame presented")
+        }
+#endif
+    }
+
+    /// Never overwrite a uniform/allocator/RT slot still in use by the GPU.
+    private func waitForInFlightFrameSlot() {
+#if !targetEnvironment(simulator)
+        let target = UInt64(frameIndex - maxBuffersInFlight)
+        if endFrameEvent.wait(untilSignaledValue: target, timeoutMS: 10) {
+            return
+        }
+        print("[FloodSurfer] WARN: in-flight wait timeout (target=\(target)) — blocking until GPU catches up")
+        // Block rather than skip-writing into a live slot (causes magenta/green garbage).
+        while !endFrameEvent.wait(untilSignaledValue: target, timeoutMS: 1000) {
+            print("[FloodSurfer] WARN: still waiting for GPU frame slot \(target)")
+        }
+#endif
+    }
+
+    /// MTKView drawable pass must always clear — never inherit .load / undefined contents.
+    private func configureDrawablePass(_ rp: MTL4RenderPassDescriptor, clearColor: MTLClearColor) {
+#if !targetEnvironment(simulator)
+        rp.colorAttachments[0].loadAction = .clear
+        rp.colorAttachments[0].storeAction = .store
+        rp.colorAttachments[0].clearColor = clearColor
+        if rp.depthAttachment.texture != nil {
+            rp.depthAttachment.loadAction = .clear
+            rp.depthAttachment.clearDepth = 1.0
+            rp.depthAttachment.storeAction = .dontCare
+        }
+        if rp.stencilAttachment.texture != nil {
+            rp.stencilAttachment.loadAction = .clear
+            rp.stencilAttachment.clearStencil = 0
+            rp.stencilAttachment.storeAction = .dontCare
         }
 #endif
     }

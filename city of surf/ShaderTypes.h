@@ -82,7 +82,7 @@ typedef struct
     float saturation;
     float vignetteStrength;
     float time;
-    float _pad0;
+    float exposure;
     simd_float2 blurDirection;
     simd_float2 texelSize;
 } PostFXUniforms;

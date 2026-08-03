@@ -58,9 +58,9 @@ make fetch-assets   # tools/fetch_assets.py + tools/assets.json
 1. **Shadow pass** — buildings, surfer, obstacles → 2048² `.depth32Float` texture
 2. **HDR scene** — sky + solids + wave → offscreen `.rgba16Float` (linear HDR; warm fog only, no tonemap)
 3. **Bloom** — soft-knee extract (half-res) → 3-mip separable Gaussian → additive upsample
-4. **Composite** — bloom add → ACES → saturation punch → vignette → film grain → drawable (`.bgra8Unorm_srgb`)
+4. **Composite** — exposure → bloom add → ACES → saturation (~1.1) → vignette (≤15% corners) → light grain → drawable (`.bgra8Unorm_srgb`)
 
-Tunables: `ArtDirection.bloomThreshold` / `bloomIntensity` / `grainAmount` / `saturation` / `vignetteStrength`.
+Tunables: `ArtDirection.exposure` / `saturation` / `vignetteStrength` / `sunIntensity` / bloom knobs.
 
 ### Metal 4 depth note
 

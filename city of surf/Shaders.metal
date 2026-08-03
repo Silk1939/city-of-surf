@@ -6,6 +6,7 @@
 #include <metal_stdlib>
 #include <simd/simd.h>
 #import "ShaderTypes.h"
+#include "SkyCommon.h"
 
 using namespace metal;
 
@@ -97,14 +98,40 @@ static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread f
     d.y += chop;
     d.x += frame.rippleAmplitude * 0.15 * cos(rk * pos.x - frame.time * 3.0) * body;
 
-    // Foam: almost only a thin crest line; tiny face bleed + chunky stylized noise.
+    // Foam mask only — chunky hard edge is applied in waveFragment.
     float foamLip = foam_crest_lip(rz, frame.waveLength);
-    float n0 = valueNoise(pos.xz * 0.35 + float2(frame.time * 0.55, frame.time * 0.25));
-    float n1 = valueNoise(pos.xz * 0.9 + float2(-frame.time * 0.7, frame.time * 0.4));
-    float chunk = step(0.42, n0 * 0.55 + n1 * 0.45);
-    foam = saturate(foamLip * 1.2 + faceMask * 0.08) * mix(0.15, 1.0, chunk);
-    foam = step(0.28, foam); // hard stylized foam edge
+    foam = saturate(foamLip * 1.25 + faceMask * 0.1);
     return pos + d;
+}
+
+/// GPU-only Gerstner-like detail (visual). Amplitudes < 0.15 — never mirror into WaveField.
+static float3 visual_wave_detail(float3 pos, constant FrameUniforms &frame)
+{
+    float t = frame.time;
+    float3 d = float3(0.0);
+
+    float k1 = 2.15;
+    float a1 = 0.09;
+    float p1 = pos.x * k1 + pos.z * k1 * 0.55 - t * 3.4;
+    float s1 = sin(p1);
+    float c1 = cos(p1);
+    d.y += a1 * s1;
+    d.x += a1 * 0.35 * c1;
+
+    float k2 = 4.7;
+    float a2 = 0.05;
+    float p2 = pos.x * k2 * 0.65 - pos.z * k2 * 0.85 - t * 5.6;
+    float s2 = sin(p2);
+    float c2 = cos(p2);
+    d.y += a2 * s2;
+    d.z += a2 * 0.28 * c2;
+
+    return d;
+}
+
+static float3 wave_visual_position(float3 pos, constant FrameUniforms &frame, thread float &foam)
+{
+    return flood_displace(pos, frame, foam) + visual_wave_detail(pos, frame);
 }
 
 static float3 flood_normal(float3 pos, constant FrameUniforms &frame)
@@ -114,6 +141,16 @@ static float3 flood_normal(float3 pos, constant FrameUniforms &frame)
     float3 c = flood_displace(pos, frame, foam);
     float3 px = flood_displace(pos + float3(eps, 0, 0), frame, foam);
     float3 pz = flood_displace(pos + float3(0, 0, eps), frame, foam);
+    return normalize(cross(pz - c, px - c));
+}
+
+static float3 wave_visual_normal(float3 pos, constant FrameUniforms &frame)
+{
+    float eps = 0.28;
+    float foam = 0.0;
+    float3 c = wave_visual_position(pos, frame, foam);
+    float3 px = wave_visual_position(pos + float3(eps, 0, 0), frame, foam);
+    float3 pz = wave_visual_position(pos + float3(0, 0, eps), frame, foam);
     return normalize(cross(pz - c, px - c));
 }
 
@@ -209,11 +246,15 @@ static float3 tonemapACES(float3 x)
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
-/// Warm distance fog in linear HDR (tonemap/grade happen in compositeFragment).
-static float3 applyWarmFog(float3 hdr, float fogAmount)
+/// Warm height+distance fog → horizon orange (#FF7A3C). Never grey.
+static float3 applyHorizonFog(float3 hdr, float3 worldPos, float3 cameraPos)
 {
-    float3 fogWarm = float3(1.0, 0.55, 0.22) * 1.25;
-    return mix(hdr, fogWarm, saturate(fogAmount));
+    float3 fogColor = float3(1.0, 0.478, 0.235) * 1.15;
+    float dist = length(worldPos - cameraPos);
+    float distFog = saturate((dist - 28.0) / 110.0);
+    float heightFog = saturate(1.0 - worldPos.y / 36.0);
+    float fogAmount = saturate(distFog * mix(0.45, 1.0, heightFog));
+    return mix(hdr, fogColor, fogAmount);
 }
 
 static float softKneeBloomWeight(float brightness, float threshold, float knee)
@@ -300,10 +341,10 @@ fragment void shadowFragment(ShadowOut in [[stage_in]])
 
 vertex SkyOut skyVertex(uint vid [[vertex_id]])
 {
-    // Fullscreen triangle
+    // Fullscreen triangle — depth at far plane so solid/wave win the depth test.
     float2 positions[3] = { float2(-1, -1), float2(3, -1), float2(-1, 3) };
     SkyOut out;
-    out.position = float4(positions[vid], 0.999, 1.0);
+    out.position = float4(positions[vid], 1.0, 1.0);
     out.uv = positions[vid] * 0.5 + 0.5;
     return out;
 }
@@ -312,32 +353,15 @@ fragment float4 skyFragment(SkyOut in [[stage_in]],
                             constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
                             texture2d<float> sky [[texture(TextureIndexSky)]])
 {
-    // Procedural CITY SURFER sunset — HDRI kept for IBL/reflections elsewhere.
+    // View rays via invViewProjection (Metal NDC z 0=near, 1=far).
     float2 ndc = in.uv * 2.0 - 1.0;
     float4 nearP = frame.invViewProjectionMatrix * float4(ndc, 0.0, 1.0);
     float4 farP  = frame.invViewProjectionMatrix * float4(ndc, 1.0, 1.0);
     float3 nearW = nearP.xyz / max(nearP.w, 1e-5);
     float3 farW  = farP.xyz / max(farP.w, 1e-5);
     float3 dir = normalize(farW - nearW);
-
-    // #FF7A2F horizon → #4A3B8C zenith
-    float3 horizon = float3(1.0, 0.478, 0.184);
-    float3 zenith = float3(0.290, 0.231, 0.549);
-    float elev = saturate(dir.y * 0.5 + 0.5);
-    float3 col = mix(horizon, zenith, pow(elev, 0.85));
-    // Warm haze near horizon
-    col = mix(col, horizon * 1.35, saturate(1.0 - abs(dir.y) * 2.2) * 0.55);
-
-    float3 sunDir = normalize(frame.lightDirection);
-    float sunDot = saturate(dot(dir, sunDir));
-    // Large soft sun disk + glow (stylized, not HDRI sun)
-    float disk = pow(sunDot, 180.0);
-    float glow = pow(sunDot, 12.0) * 1.8 + pow(sunDot, 4.0) * 0.55;
-    float3 sunCol = frame.lightColor * frame.sunIntensity;
-    col += sunCol * (disk * 6.0 + glow);
-    col += float3(1.0, 0.95, 0.7) * disk * 8.0;
-
-    return float4(applyWarmFog(col, 0.08), 1.0);
+    float3 col = evaluateProceduralSky(dir, frame.lightDirection, frame.lightColor, frame.sunIntensity);
+    return float4(col, 1.0);
 }
 
 vertex VOut solidVertex(Vertex in [[stage_in]],
@@ -414,7 +438,8 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         albedo += frame.lightColor * glitter * 0.55;
     }
 
-    // Glass/facade buildings (materialId 6): warm stylized facades + window glow
+    // Glass/facade buildings (materialId 6): warm stylized facades + HDR window glow
+    float windowEmit = 0.0;
     if (object.materialId > 5.5 && object.materialId < 6.5) {
         // Prefer art-directed tint over gray PBR albedo.
         albedo = mix(albedo, object.color.rgb, 0.82);
@@ -429,8 +454,7 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         float window = step(0.16, wx) * step(wx, 0.84) * step(0.18, wz) * step(wz, 0.82) * facing;
         float lit = step(0.55, fract(sin(dot(floor(in.worldPos.xyz * float3(0.35, 0.55, 0.35)), float3(12.1, 78.2, 45.3))) * 43758.5));
         albedo = mix(albedo, albedo * 0.12, window * 0.9);
-        // HDR emissive so bloom picks window glow.
-        albedo += float3(1.0, 0.78, 0.35) * lit * window * 1.6;
+        windowEmit = lit * window;
     }
 
     // Sidewalks / concrete slabs — no building window grid.
@@ -481,33 +505,41 @@ fragment float4 solidFragment(VOut in [[stage_in]],
                           frame.lightColor, frame.sunIntensity, shadow,
                           irradiance, prefiltered, brdf, frame.iblIntensity);
 
-    // Neon / boost emissives written > 1 so the bloom chain lights them up.
+    // HDR emissives (2–6 range) — bloom food after tonemap moves to composite.
+    if (windowEmit > 0.0) {
+        color += float3(1.0, 0.78, 0.35) * windowEmit * 4.0;
+    }
+    // Warm sunset rim on building edges (flat front-above sun).
+    if (object.materialId > 5.5 && object.materialId < 6.5) {
+        float rim = pow(1.0 - saturate(dot(N, V)), 2.4);
+        float sunGlancing = saturate(1.0 - abs(dot(N, L)));
+        color += frame.lightColor * rim * sunGlancing * frame.sunIntensity * 0.12;
+    }
     if (object.materialId > 2.5 && object.materialId < 3.5) {
         float rim = pow(1.0 - saturate(dot(N, V)), 2.0);
-        float3 rimCol = mix(float3(0.45, 0.98, 0.18), object.color.rgb, 0.45);
-        color += rimCol * rim * 2.4;
-        color += object.color.rgb * 0.45;
+        float3 rimCol = mix(float3(0.220, 0.898, 1.0), object.color.rgb, 0.45); // neon cyan
+        color += rimCol * rim * 3.5;
+        color += object.color.rgb * 2.2;
     }
     if (object.materialId > 4.5 && object.materialId < 5.5) {
         float pulse = 0.55 + 0.45 * sin(frame.time * 7.0 + in.worldPos.x * 2.0);
-        color += object.color.rgb * pulse * 2.8;
+        color += object.color.rgb * pulse * 4.0;
         float rim = pow(1.0 - saturate(dot(N, V)), 1.4);
-        color += float3(1.0, 0.92, 0.35) * rim * 2.6;
+        color += float3(1.0, 0.92, 0.35) * rim * 3.0;
         float glint = pow(saturate(dot(N, normalize(L + V))), 64.0);
-        color += float3(1.0, 0.95, 0.6) * glint * 4.0;
+        color += float3(1.0, 0.95, 0.6) * glint * 5.5;
     }
-    // Traffic-light / hazard / billboard neon
+    // Traffic-light / hazard / billboard neon (magenta/cyan sparingly)
     if (object.materialId > 3.5 && object.materialId < 4.5) {
         float chroma = max(object.color.r, max(object.color.g, object.color.b))
                      - min(object.color.r, min(object.color.g, object.color.b));
         if (chroma > 0.35) {
             float pulse = 0.7 + 0.3 * sin(frame.time * 8.0);
-            color += object.color.rgb * pulse * 2.2;
+            color += object.color.rgb * pulse * 3.5;
         }
     }
 
-    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 120.0);
-    return float4(applyWarmFog(color, fog * 0.55), 1.0);
+    return float4(applyHorizonFog(color, in.worldPos, frame.cameraPosition), 1.0);
 }
 
 vertex VOut waveVertex(Vertex in [[stage_in]],
@@ -517,14 +549,14 @@ vertex VOut waveVertex(Vertex in [[stage_in]],
     VOut out;
     float4 worldBase = object.modelMatrix * float4(in.position, 1.0);
     float foam = 0.0;
-    float3 displaced = flood_displace(worldBase.xyz, frame, foam);
+    // Gameplay flood shape + GPU-only detail octaves (not in WaveField).
+    float3 displaced = wave_visual_position(worldBase.xyz, frame, foam);
     out.worldPos = displaced;
     out.position = frame.viewProjectionMatrix * float4(displaced, 1.0);
-    out.normal = flood_normal(worldBase.xyz, frame);
+    out.normal = wave_visual_normal(worldBase.xyz, frame);
     out.texCoord = in.texCoord;
     out.foam = foam;
     out.materialId = 0.0;
-    // Larger normal offset on water — large sloping face is acne-prone.
     out.shadowCoord = shadowCoordWithNormalOffset(
         displaced, out.normal, frame.lightDirection, frame, 0.18);
     return out;
@@ -540,59 +572,75 @@ fragment float4 waveFragment(VOut in [[stage_in]],
                              texture2d<float> sky [[texture(TextureIndexSky)]])
 {
     constexpr sampler iblSampler(s_address::repeat, t_address::clamp_to_edge, filter::linear);
-    constexpr sampler shadowSampler(coord::normalized, filter::linear, address::clamp_to_edge);
 
     float3 N = normalize(in.normal);
     float3 V = normalize(frame.cameraPosition - in.worldPos);
     float3 L = normalize(frame.lightDirection);
-    float fresnel = pow(1.0 - saturate(dot(N, V)), 2.4);
+    float NdotV = saturate(dot(N, V));
+    float fresnel = pow(1.0 - NdotV, 2.6);
 
-    // CITY SURFER water — saturated teal/aqua (#0A6E7E / #14B8C4 / #5FE8DC)
-    float3 deep = float3(0.039, 0.431, 0.494);
-    float3 mid = float3(0.078, 0.722, 0.769);
-    float3 shallow = float3(0.373, 0.910, 0.863);
+    // Body: deep teal when looking steep, shallow turquoise toward lip.
+    float3 deep = float3(0.039, 0.227, 0.290);      // #0A3A4A
+    float3 mid = float3(0.090, 0.500, 0.520);
+    float3 shallow = float3(0.180, 0.769, 0.714);   // #2EC4B6
     float h = saturate(in.worldPos.y / max(frame.waveAmplitude, 0.001));
     float3 water = mix(deep, mid, smoothstep(0.0, 0.4, h));
     water = mix(water, shallow, smoothstep(0.4, 0.95, h));
+    // Grazing = orange sky reflection dominates; steep = deep teal body.
+    water = mix(water, deep * 1.05, NdotV);
 
-    // Chunky pure-white foam (hard edge from vertex).
-    float foamAmt = step(0.5, in.foam);
-    water = mix(water, float3(1.0, 1.0, 1.0), foamAmt);
-
-    // Soft street-edge darkening (no shadow map).
     float edge = saturate((abs(in.worldPos.x) - 4.5) / 6.5);
     float edgeShade = mix(1.0, 0.78, edge * edge);
+    water *= edgeShade;
 
-    // Orange sky fresnel on teal = reference signature contrast.
+    // Analytic sky fresnel (shared SkyCommon) — flat look = orange, steep = teal body above.
     float3 R = reflect(-V, N);
-    float skyElev = saturate(R.y * 0.5 + 0.5);
-    float3 skyHorizon = float3(1.0, 0.478, 0.184);
-    float3 skyZenith = float3(0.290, 0.231, 0.549);
-    float3 skyCol = mix(skyHorizon, skyZenith, pow(skyElev, 0.85));
-    float sunDot = saturate(dot(normalize(R), L));
-    skyCol += frame.lightColor * frame.sunIntensity * (pow(sunDot, 24.0) * 2.5 + pow(sunDot, 6.0) * 0.6);
-    water = water * edgeShade + skyCol * fresnel * 0.55;
+    float3 skyCol = evaluateProceduralSky(R, frame.lightDirection, frame.lightColor, frame.sunIntensity);
+    water = mix(water, skyCol, fresnel * 0.85);
 
-    // Sun glitter path down the flooded street (art-ref signature).
-    float street = 1.0 - smoothstep(0.5, 4.0, abs(in.worldPos.x));
-    float sparkle = hash21(floor(in.worldPos.xz * 1.8 + float2(frame.time * 3.0, 0.0)));
-    float glitterPath = street * pow(saturate(dot(N, L)), 3.0);
-    glitterPath *= 0.45 + 0.55 * sin(in.worldPos.z * 1.7 + frame.time * 5.0);
-    glitterPath += street * pow(sunDot, 10.0) * step(0.62, sparkle) * 1.4;
-    // Slightly hotter glitter so bloom catches the street path.
-    water += frame.lightColor * glitterPath * frame.sunIntensity * 0.85;
+    // Money-shot sun glitter: narrow HDR streak, noise breakup.
+    float3 H = normalize(L + V);
+    float street = 1.0 - smoothstep(0.35, 2.8, abs(in.worldPos.x));
+    float glitterCore = pow(saturate(dot(N, H)), 160.0) * street;
+    glitterCore += pow(saturate(dot(N, L)), 48.0) * street * 0.25;
+    float sparkle = valueNoise(in.worldPos.xz * 2.4 + float2(frame.time * 4.2, -frame.time * 1.8));
+    float sparkle2 = valueNoise(in.worldPos.xz * 5.5 + float2(-frame.time * 3.1, frame.time * 2.4));
+    float glitterMask = smoothstep(0.55, 0.78, sparkle * 0.6 + sparkle2 * 0.4);
+    float glitter = glitterCore * mix(0.15, 1.0, glitterMask);
+    water += frame.lightColor * glitter * 8.0;
+
+    // Crest lip + SSS: sun through the lip → glowing turquoise.
+    float rz = in.worldPos.z + frame.scrollZ;
+    float lip = crest_lip(rz, frame.waveLength);
+    float throughLip = saturate(dot(V, -L));
+    float sss = pow(throughLip, 2.0) * lip;
+    water += float3(0.180, 0.769, 0.714) * 2.5 * sss;
+
+    // Chunky foam: vertex mask × 2-octave hard noise clusters (#FFF6E9).
+    float2 foamUV = in.worldPos.xz * 0.42 + float2(frame.time * 0.15, -frame.time * 0.55);
+    float n0 = valueNoise(foamUV);
+    float n1 = valueNoise(foamUV * 2.3 + float2(17.1, 9.3));
+    float chunk = n0 * 0.55 + n1 * 0.45;
+    float foamCluster = smoothstep(0.48, 0.55, chunk); // hard stylized edge
+    float foamAmt = step(0.22, in.foam) * foamCluster;
+
+    // Thin foam lines riding the crest, scrolling backward with time.
+    float lineRz = rz - frame.time * 3.2 + sin(in.worldPos.x * 1.7) * 0.45;
+    float crestLine = foam_crest_lip(lineRz, frame.waveLength);
+    float lineNoise = step(0.5, valueNoise(float2(in.worldPos.x * 1.2, frame.time * 0.8)));
+    float foamLines = step(0.62, crestLine) * lineNoise;
+
+    float3 foamCol = float3(1.0, 0.965, 0.914);
+    water = mix(water, foamCol, saturate(foamAmt + foamLines * 0.85));
 
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
-    irr = mix(irr, irr * float3(1.0, 0.55, 0.22) * 1.3, 0.5);
-    water += irr * 0.04 * frame.iblIntensity;
+    irr = mix(irr, irr * kSkyHorizon * 1.3, 0.5);
+    water += irr * 0.035 * frame.iblIntensity;
 
-    float ndotl = saturate(dot(N, L));
-    float3 H = normalize(L + V);
-    float spec = pow(saturate(dot(N, H)), 48.0) * (0.35 + 0.65 * fresnel);
-    water += spec * frame.lightColor * frame.sunIntensity * 0.4 * edgeShade;
+    float spec = pow(saturate(dot(N, H)), 56.0) * (0.25 + 0.75 * fresnel);
+    water += spec * frame.lightColor * frame.sunIntensity * 0.35 * edgeShade;
 
-    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 130.0);
-    return float4(applyWarmFog(water, fog * 0.5), 1.0);
+    return float4(applyHorizonFog(water, in.worldPos, frame.cameraPosition), 1.0);
 }
 
 // MARK: - Post-FX (fullscreen triangle → bloom + composite)
@@ -676,10 +724,10 @@ fragment float4 compositeFragment(PostOut in [[stage_in]],
                                   texture2d<float> bloom [[texture(TextureIndexBloom)]])
 {
     constexpr sampler s(address::clamp_to_edge, filter::linear);
-    float3 hdr = scene.sample(s, in.uv).rgb;
+    float3 hdr = scene.sample(s, in.uv).rgb * fx.exposure;
     hdr += bloom.sample(s, in.uv).rgb * fx.bloomIntensity;
 
-    // Fog already applied in scene shaders — grade + tonemap here.
+    // ACES filmic → saturation punch (~1.1) → subtle vignette (max ~15% corners).
     float3 mapped = tonemapACES(hdr);
     float luma = dot(mapped, float3(0.2126, 0.7152, 0.0722));
     mapped = mix(float3(luma), mapped, fx.saturation);
