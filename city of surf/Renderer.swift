@@ -40,9 +40,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     let commandBuffer: MTL4CommandBuffer
     let commandAllocators: [MTL4CommandAllocator]
     var residencySet: MTLResidencySet
-    let vertexArgumentTable: MTL4ArgumentTable
-    let fragmentArgumentTable: MTL4ArgumentTable
+    /// One argument-table pair per in-flight frame — never mutate a table the GPU still reads.
+    let vertexArgumentTables: [MTL4ArgumentTable]
+    let fragmentArgumentTables: [MTL4ArgumentTable]
 #endif
+
 
     let endFrameEvent: MTLSharedEvent
     var frameIndex = 0
@@ -83,6 +85,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var fpsFrames: Int = 0
     private var waveShapeLogAccum: Float = 0
     private var lastWasGameOver = false
+    /// HDR textures currently registered in `residencySet` (removed on recreate).
+    private var residentHDRTextures: [MTLTexture] = []
 
     @MainActor
     init?(metalKitView: MTKView, gameState: GameState) {
@@ -127,17 +131,23 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let argTableDesc = MTL4ArgumentTableDescriptor()
         argTableDesc.maxBufferBindCount = 5
-        guard let vat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
-            fail("vertexArgumentTable fehlgeschlagen")
-            return nil
-        }
-        self.vertexArgumentTable = vat
         argTableDesc.maxTextureBindCount = 8
-        guard let fat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
-            fail("fragmentArgumentTable fehlgeschlagen (maxTextureBindCount=8)")
-            return nil
+        var vTables: [MTL4ArgumentTable] = []
+        var fTables: [MTL4ArgumentTable] = []
+        for i in 0..<maxBuffersInFlight {
+            guard let vat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
+                fail("vertexArgumentTable[\(i)] fehlgeschlagen")
+                return nil
+            }
+            guard let fat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
+                fail("fragmentArgumentTable[\(i)] fehlgeschlagen")
+                return nil
+            }
+            vTables.append(vat)
+            fTables.append(fat)
         }
-        self.fragmentArgumentTable = fat
+        self.vertexArgumentTables = vTables
+        self.fragmentArgumentTables = fTables
 
         guard let sharedEvent = device.makeSharedEvent() else {
             fail("makeSharedEvent fehlgeschlagen")
@@ -335,14 +345,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let residencyDesc = MTLResidencySetDescriptor()
-        residencyDesc.initialCapacity = 128
+        residencyDesc.initialCapacity = 256
         guard let rs = try? device.makeResidencySet(descriptor: residencyDesc) else {
             fail("makeResidencySet fehlgeschlagen")
             return nil
         }
         rs.addAllocations([frameUniformBuffer, objectUniformBuffer, postFXUniformBuffer])
         rs.addAllocations(shadowMap.allTextures)
-        rs.addAllocations(hdrPipeline.allTextures)
+        residentHDRTextures = hdrPipeline.allTextures
+        rs.addAllocations(residentHDRTextures)
         for mesh in [unitBox, waveMesh, surferMesh, coinMesh] {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
             rs.addAllocations(mesh.submeshes.map(\.indexBuffer.buffer))
@@ -385,11 +396,25 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     private func refreshHDRResidency() {
 #if !targetEnvironment(simulator)
-        // HDR targets recreated on resize — keep residency set in sync.
-        residencySet.addAllocations(hdrPipeline.allTextures)
+        // Drop freed placeholder/previous HDR targets — dangling residency = green garbage.
+        if !residentHDRTextures.isEmpty {
+            residencySet.removeAllocations(residentHDRTextures)
+        }
+        residentHDRTextures = hdrPipeline.allTextures
+        residencySet.addAllocations(residentHDRTextures)
         residencySet.commit()
 #endif
     }
+
+#if !targetEnvironment(simulator)
+    private var vertexArgumentTable: MTL4ArgumentTable {
+        vertexArgumentTables[uniformBufferIndex]
+    }
+
+    private var fragmentArgumentTable: MTL4ArgumentTable {
+        fragmentArgumentTables[uniformBufferIndex]
+    }
+#endif
     class func buildMetalVertexDescriptor() -> MTLVertexDescriptor {
         let vd = MTLVertexDescriptor()
         vd.attributes[VertexAttribute.position.rawValue].format = .float3
@@ -1110,6 +1135,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandAllocator.reset()
         // Reuse the single MTL4CommandBuffer; allocator provides per-frame backing memory.
         commandBuffer.beginCommandBuffer(allocator: commandAllocator)
+        // beginCommandBuffer clears prior residency — re-attach every frame.
+        commandBuffer.useResidencySet(residencySet)
+        commandBuffer.useResidencySet((view.layer as! CAMetalLayer).residencySet)
 
         shadowMap.updateLightMatrix(
             sunDirection: ArtDirection.sunDirection,
@@ -1209,7 +1237,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         encodeFullscreen(compositeEncoder, pipeline: compositePipeline, label: "Composite")
         compositeEncoder.endEncoding()
 
-        commandBuffer.useResidencySet((view.layer as! CAMetalLayer).residencySet)
         commandBuffer.endCommandBuffer()
 
         commandQueue.waitForDrawable(drawable)

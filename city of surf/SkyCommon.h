@@ -20,7 +20,7 @@ constant float3 kSkyHorizon = float3(1.0, 0.478, 0.235);
 constant float3 kSkyZenith = float3(0.169, 0.227, 0.404);
 /// #FFE8B0
 constant float3 kSunDiskColor = float3(1.0, 0.910, 0.690);
-constant float kSunDiskIntensity = 20.0;
+constant float kSunDiskIntensity = 12.0;
 
 /// Analytic procedural sky for a world-space view/reflection direction.
 static inline float3 evaluateProceduralSky(float3 dir,

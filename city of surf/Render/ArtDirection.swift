@@ -55,14 +55,14 @@ enum ArtDirection {
     static let sunDiskIntensity: Float = 20.0
 
     /// Composite: exposure → bloom add → ACES → saturation → vignette.
-    static let exposure: Float = 1.0
+    static let exposure: Float = 0.85
     static let saturation: Float = 1.1
     /// Max corner darkening (0.15 = 15%).
     static let vignetteStrength: Float = 0.15
     static let bloomThreshold: Float = 1.2
     static let bloomSoftKnee: Float = 0.5
-    static let bloomIntensity: Float = 0.35
-    static let grainAmount: Float = 0.015
+    static let bloomIntensity: Float = 0.22
+    static let grainAmount: Float = 0.012
 
     /// Cycle warm/cool facade tints (sun vs shadow sides of the street).
     static func buildingTint(index: Int) -> SIMD3<Float> {

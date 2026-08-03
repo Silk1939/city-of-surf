@@ -726,6 +726,9 @@ fragment float4 compositeFragment(PostOut in [[stage_in]],
     constexpr sampler s(address::clamp_to_edge, filter::linear);
     float3 hdr = scene.sample(s, in.uv).rgb * fx.exposure;
     hdr += bloom.sample(s, in.uv).rgb * fx.bloomIntensity;
+    // Guard non-resident / bad samples (NaN/Inf → green/white garbage on device).
+    hdr = select(hdr, float3(0.0), isnan(hdr) || isinf(hdr));
+    hdr = clamp(hdr, float3(0.0), float3(24.0));
 
     // ACES filmic → saturation punch (~1.1) → subtle vignette (max ~15% corners).
     float3 mapped = tonemapACES(hdr);
