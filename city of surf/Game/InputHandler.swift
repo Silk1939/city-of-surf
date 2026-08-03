@@ -19,6 +19,8 @@ final class InputHandler: NSObject, UIGestureRecognizerDelegate {
     private var getSurferX: (() -> Float)?
     /// Sensitive 1:1 feel.
     private let pixelsPerMeter: CGFloat = 16
+    /// Fire jump/duck once mid-gesture when threshold is crossed (not only on finger-up).
+    private var didFireVertical = false
 
     func attach(to view: UIView, surferX: @escaping () -> Float) {
         self.view = view
@@ -46,33 +48,44 @@ final class InputHandler: NSObject, UIGestureRecognizerDelegate {
         switch gesture.state {
         case .began:
             panStartSurferX = getSurferX?() ?? 0
+            didFireVertical = false
 
         case .changed:
-            // Invert: finger moves left on glass -> character moves left on screen.
-            // (UIKit +X is right; our chase-cam mapping needs the minus.)
+            tryFireVertical(translation: translation, velocity: velocity)
+            // Invert: finger left → character left.
             if abs(translation.x) >= abs(translation.y) * 0.55 || abs(translation.x) > 6 {
                 let worldX = panStartSurferX - Float(translation.x / pixelsPerMeter)
                 onSteer?(worldX)
             }
 
         case .ended, .cancelled:
-            let absX = abs(translation.x)
-            let absY = abs(translation.y)
-            if absY > absX && absY > 36 {
-                if velocity.y < -180 || translation.y < -36 {
-                    onVerticalSwipe?(.up)
-                } else if velocity.y > 180 || translation.y > 36 {
-                    onVerticalSwipe?(.down)
-                }
-                return
+            if !didFireVertical {
+                tryFireVertical(translation: translation, velocity: velocity)
             }
-            if absX > 6 {
+            if !didFireVertical, abs(translation.x) > 6 {
                 let worldX = panStartSurferX - Float(translation.x / pixelsPerMeter)
                 onSteer?(worldX)
             }
 
         default:
             break
+        }
+    }
+
+    private func tryFireVertical(translation: CGPoint, velocity: CGPoint) {
+        guard !didFireVertical else { return }
+        let absX = abs(translation.x)
+        let absY = abs(translation.y)
+        // Allow slightly diagonal flicks; velocity can win when travel is short.
+        let verticalDominant = absY > absX * 0.75 || abs(velocity.y) > abs(velocity.x) * 1.2
+        guard verticalDominant else { return }
+
+        if velocity.y < -220 || translation.y < -28 {
+            didFireVertical = true
+            onVerticalSwipe?(.up)
+        } else if velocity.y > 220 || translation.y > 28 {
+            didFireVertical = true
+            onVerticalSwipe?(.down)
         }
     }
 

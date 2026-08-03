@@ -32,10 +32,24 @@ Das Debug-HUD bleibt an (`showDebugHUD = true`), bis der erste Device-Run bestä
 | KTX geladen | `ktx=OK` | `CHECK OK: KTX/PBR geladen…` |
 | IBL Peak | `iblPeak=…` | Peak aus `lighting.json` |
 | Shadow Map | `shadow=OK` | `CHECK OK: Shadow Map erstellt` |
-| Texture memory | `texMem≈…MB` | Warnung wenn > **192 MB** |
+| Texture memory | `texMem≈…MB` | Warnung wenn > **128 MB** |
 | Erster Frame | `frame1=OK` | `CHECK OK: first frame presented` |
 
 Bei Fehler: `ERR: …` im HUD **und** `CHECK FAIL: …` im Device-Log (konkrete Ursache, keine generische Meldung).
+
+## Asset-Größen (Runtime)
+
+Nach `make fetch-assets` (`runtime_resolution: 1024`):
+
+| Asset | Größe / Format |
+|---|---|
+| PBR maps (albedo/normal/roughness) | **1024²** PNG |
+| `sky_equirect.ktx` | **1024×512** RGBA16F |
+| `irradiance_equirect.ktx` | 32×16 RGBA16F |
+| `specular_m0…m4.ktx` | **je 64×32** RGBA16F (gleiche Größe, Roughness 0…1) |
+| `brdf_lut.ktx` | 128² RG16F |
+
+Texture-Memory-Warnung im Debug-HUD: **> 128 MB**.
 
 ## Erwartetes Startbild
 
@@ -68,7 +82,7 @@ Statisch geprüft:
 | `Simulator-Build — kein gültiger Metal-4-Test` | Falsche Destination |
 | `Asset fehlt: *.ktx` | Bundle ohne Lighting — `make fetch-assets`, Clean |
 | `Falsches Pixel-Format` | LDR/alte Assets |
-| `texMem≈… WARN` | Speicherbudget > 192 MB — Jetsam-Risiko |
+| `texMem≈… WARN` | Speicherbudget > 128 MB — Jetsam-Risiko |
 | `frame1` bleibt `…` | Draw kommt nicht (Drawable/Pause) |
 
 ## Nächster manueller Schritt

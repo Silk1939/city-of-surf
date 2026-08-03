@@ -4,17 +4,22 @@
 //
 //  Single flood-front height field — must match Shaders.metal.
 //
+//  Stabilization baseline (2026-08-03): keep camera / city / sky readable.
+//  Giant art-ref wave comes later with matching camera + sky steps.
+//
 
 import simd
 
 struct WaveField {
-    var amplitude: Float = 16.0
-    var faceWidth: Float = 18.0
+    var amplitude: Float = 2.4
+    var faceWidth: Float = 9.0
     var speed: Float = 16.0
-    var steepness: Float = 0.9
+    var steepness: Float = 0.55
     var direction: SIMD2<Float> = SIMD2(0, 1)
-    var rippleAmplitude: Float = 0.18
-    var rippleLength: Float = 5.5
+    var rippleAmplitude: Float = 0.12
+    var rippleLength: Float = 5.0
+    /// Crest alignment relative to surfer; 0 = crest at player Z.
+    var crestShift: Float = 0
 
     var wavelength: Float {
         get { faceWidth }
@@ -22,7 +27,7 @@ struct WaveField {
     }
 
     private func relativeZ(_ z: Float, scrollZ: Float) -> Float {
-        z + scrollZ
+        z + scrollZ + crestShift
     }
 
     private func floodBody(_ rz: Float) -> Float {

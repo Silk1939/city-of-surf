@@ -26,6 +26,14 @@ struct HUDView: View {
                                 .foregroundStyle(Color(red: 1.0, green: 0.9, blue: 0.35))
                                 .scaleEffect(gameState.collectPulse > 0 ? 1.15 : 1.0)
                         }
+                        Text("SCORE \(gameState.score)")
+                            .font(.system(size: 13, weight: .heavy, design: .rounded))
+                            .foregroundStyle(Color(red: 0.55, green: 0.95, blue: 0.25))
+                            .shadow(
+                                color: Color(red: 0.45, green: 0.98, blue: 0.18)
+                                    .opacity(0.35 + Double(gameState.collectPulse) * 0.55),
+                                radius: 6
+                            )
                     }
                     .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
                     Spacer()
@@ -72,11 +80,26 @@ struct HUDView: View {
             }
 
             if gameState.isGameOver {
-                Color.black.opacity(0.55).ignoresSafeArea()
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.15, green: 0.05, blue: 0.2).opacity(0.75),
+                        Color(red: 0.9, green: 0.35, blue: 0.1).opacity(0.55)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
                 VStack(spacing: 16) {
                     Text("WIPEOUT")
-                        .font(.system(size: 42, weight: .black, design: .rounded))
-                        .foregroundStyle(.white)
+                        .font(.system(size: 44, weight: .black, design: .rounded))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.white, Color(red: 1.0, green: 0.7, blue: 0.2)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                     HStack(spacing: 18) {
                         VStack {
                             Text("\(gameState.distanceScore) m")

@@ -17,4 +17,3 @@ All third-party assets below are **CC0** (public domain dedication).
 - Fetched by `tools/fetch_assets.py` from `tools/assets.json`.
 - Source 4K assets are downsampled to 2K for the iOS app bundle (memory).
 - Flood Surfer uses **Metal 4** IBL (not RealityKit ImageBasedLight).
-- IBL maps are linear **RGBA16F / RG16F KTX** (HDR). Albedo/normal/roughness materials remain 8-bit PNG.

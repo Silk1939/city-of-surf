@@ -59,4 +59,27 @@ enum MeshFactory {
         try applyVertexDescriptor(vertexDescriptor, to: mdl)
         return try MTKMesh(mesh: mdl, device: device)
     }
+
+    /// Thin cylinder (axis = Y) — upright coin disk spun around Y.
+    static func makeCylinder(
+        device: MTLDevice,
+        height: Float,
+        radius: Float,
+        radialSegments: UInt32 = 24,
+        verticalSegments: UInt32 = 1,
+        vertexDescriptor: MTLVertexDescriptor
+    ) throws -> MTKMesh {
+        let allocator = MTKMeshBufferAllocator(device: device)
+        let mdl = MDLMesh.newCylinder(
+            withHeight: height,
+            radii: SIMD2(radius, radius),
+            radialSegments: Int(radialSegments),
+            verticalSegments: Int(verticalSegments),
+            geometryType: .triangles,
+            inwardNormals: false,
+            allocator: allocator
+        )
+        try applyVertexDescriptor(vertexDescriptor, to: mdl)
+        return try MTKMesh(mesh: mdl, device: device)
+    }
 }

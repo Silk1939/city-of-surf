@@ -13,10 +13,11 @@ enum SurferPose {
 
 struct SurferController {
     static let maxX: Float = 6.2
-    static let jumpDuration: Float = 0.52
-    static let jumpHeight: Float = 2.6
-    static let duckDuration: Float = 0.38
+    static let jumpDuration: Float = 0.48
+    static let jumpHeight: Float = 3.1
+    static let duckDuration: Float = 0.50
     static let standingHeight: Float = 1.55
+    static let queueWindow: Float = 0.14
 
     var x: Float = 0
     var targetX: Float = 0
@@ -25,6 +26,9 @@ struct SurferController {
     var position: SIMD3<Float> = .zero
     var radius: Float = 0.5
     var lean: Float = 0
+    /// Buffered vertical action while jump/duck is playing.
+    private var queuedPose: SurferPose?
+    private var queueTimer: Float = 0
 
     var currentHeight: Float {
         pose == .ducking ? Self.standingHeight * 0.42 : Self.standingHeight
@@ -37,17 +41,36 @@ struct SurferController {
         x = clamped
     }
 
-
     mutating func jump() {
-        guard pose == .standing else { return }
-        pose = .jumping
-        poseTimer = Self.jumpDuration
+        if pose == .standing {
+            pose = .jumping
+            poseTimer = Self.jumpDuration
+            queuedPose = nil
+            queueTimer = 0
+            return
+        }
+        // Jump can cancel a duck mid-window for snappier feel.
+        if pose == .ducking {
+            pose = .jumping
+            poseTimer = Self.jumpDuration
+            queuedPose = nil
+            queueTimer = 0
+            return
+        }
+        queuedPose = .jumping
+        queueTimer = Self.queueWindow
     }
 
     mutating func duck() {
-        guard pose == .standing else { return }
-        pose = .ducking
-        poseTimer = Self.duckDuration
+        if pose == .standing {
+            pose = .ducking
+            poseTimer = Self.duckDuration
+            queuedPose = nil
+            queueTimer = 0
+            return
+        }
+        queuedPose = .ducking
+        queueTimer = Self.queueWindow
     }
 
     mutating func update(deltaTime: Float, wave: WaveField, time: Float, scrollZ: Float) {
@@ -64,10 +87,26 @@ struct SurferController {
             if poseTimer <= 0 {
                 pose = .standing
                 poseTimer = 0
+                if let next = queuedPose, queueTimer > 0 {
+                    if next == .jumping {
+                        pose = .jumping
+                        poseTimer = Self.jumpDuration
+                    } else if next == .ducking {
+                        pose = .ducking
+                        poseTimer = Self.duckDuration
+                    }
+                    queuedPose = nil
+                    queueTimer = 0
+                }
             }
+        }
+        if queueTimer > 0 {
+            queueTimer = max(0, queueTimer - deltaTime)
+            if queueTimer == 0 { queuedPose = nil }
         }
 
         let baseZ: Float = 0
+        // Full wave displacement — match GPU flood curl so surfer sits on the face.
         let sample = wave.displacement(x: x, z: baseZ, time: time, scrollZ: scrollZ)
         var y = sample.y + 0.4
         let h = currentHeight
@@ -79,7 +118,7 @@ struct SurferController {
             y -= 0.3
         }
 
-        position = SIMD3(x + sample.x * 0.15, y + h * 0.5, baseZ + sample.z * 0.1)
+        position = SIMD3(x + sample.x, y + h * 0.5, baseZ + sample.z)
     }
 
     var collisionCenter: SIMD3<Float> { position }

@@ -58,18 +58,26 @@ struct CoinSystem {
         scrollZ: Float
     ) -> Int {
         var collected = 0
-        let sx = surfer.x
+        let sx = surfer.collisionCenter.x
+        let sy = surfer.collisionCenter.y
+        let sz = surfer.collisionCenter.z
         for i in coins.indices {
             guard coins[i].active else { continue }
             let worldZ = coins[i].localZ - runDistance
-            if worldZ < -8 {
+            if worldZ < -10 {
                 coins[i].active = false
                 continue
             }
-            let dx = coins[i].x - sx
-            let dz = worldZ
-            // Generous XZ pickup cylinder.
-            if abs(dx) < 2.3 && abs(dz) < 2.8 {
+
+            let pos = worldPosition(for: coins[i], runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ)
+            let dx = pos.x - sx
+            let dy = pos.y - sy
+            let dz = pos.z - sz
+            // Relative to surfer (not world origin) — curl can shift z.
+            if abs(dx) > 2.5 || abs(dz) > 1.6 { continue }
+            // Skip while jumping high over the lane (no magnet through air).
+            if surfer.pose == .jumping && dy > 1.4 { continue }
+            if abs(dy) < 2.4 {
                 coins[i].active = false
                 collected += 1
             }
@@ -88,10 +96,11 @@ struct CoinSystem {
         return collected
     }
 
+    /// Visual + pickup center (upright disk sits above water).
     func worldPosition(for coin: Coin, runDistance: Float, wave: WaveField, time: Float, scrollZ: Float) -> SIMD3<Float> {
         let worldZ = coin.localZ - runDistance
         let bob = sin(time * 7.0 + coin.localZ) * 0.25
-        let water = wave.height(x: coin.x, z: worldZ, time: time, scrollZ: scrollZ)
-        return SIMD3(coin.x, water + 1.15 + bob, worldZ)
+        let sample = wave.displacement(x: coin.x, z: worldZ, time: time, scrollZ: scrollZ)
+        return SIMD3(coin.x + sample.x, sample.y + 1.55 + bob, worldZ + sample.z)
     }
 }

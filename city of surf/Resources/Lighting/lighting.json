@@ -1,19 +1,22 @@
 {
   "sunDirection": [
-    0.7214837074279785,
-    0.3330482840538025,
-    0.6070750951766968
+    0.35,
+    0.55,
+    0.55
   ],
   "sunColor": [
     1.0,
-    0.5930954217910767,
-    0.23142555356025696
+    0.62,
+    0.28
   ],
-  "sunIntensity": 2.8,
-  "iblIntensity": 1.15,
-  "irradiancePeak": 1.5808300971984863,
+  "sunIntensity": 2.6,
+  "iblIntensity": 0.85,
+  "skyPeak": 19.75,
+  "irradiancePeak": 19.75,
+  "irradianceMapPeak": 1.5808300971984863,
   "specularMips": 5,
-  "shadowBias": 0.002,
+  "shadowBias": 0.0035,
   "hdri": "sunset_jhbcentral",
-  "iblFormat": "rgba16f_ktx"
+  "iblFormat": "rgba16f_ktx",
+  "note": "Display sky is procedural; sun values mirrored in ArtDirection.swift"
 }

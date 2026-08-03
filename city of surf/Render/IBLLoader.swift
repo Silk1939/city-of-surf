@@ -107,12 +107,12 @@ enum IBLLoader {
             }
         }
 
-        func hdrTex(_ name: String, expected: MTLPixelFormat) throws -> MTLTexture {
+        func hdrTex(_ name: String, expected: MTLPixelFormat) throws -> (MTLTexture, URL) {
             let file = "\(name).ktx"
             guard let url = findURL(name, ext: "ktx") else {
                 throw IBLLoadError.missingFile(file)
             }
-            // No silent MTKTextureLoader fallback — float KTX must go through our parser.
+            // No silent MTKTextureLoader / JPG / PNG fallback — float KTX only.
             let tex: MTLTexture
             do {
                 tex = try loadKTXhalfFloat(url: url, device: device)
@@ -127,7 +127,14 @@ enum IBLLoader {
                     "\(expected) (ist \(tex.pixelFormat.rawValue))"
                 )
             }
-            return tex
+            let fmtName: String
+            switch tex.pixelFormat {
+            case .rgba16Float: fmtName = "rgba16Float"
+            case .rg16Float: fmtName = "rg16Float"
+            default: fmtName = "raw=\(tex.pixelFormat.rawValue)"
+            }
+            print("IBLLoader LOAD \(file): path=\(url.path) format=\(fmtName) size=\(tex.width)x\(tex.height)")
+            return (tex, url)
         }
 
         func material(_ prefix: String) throws -> PBRMaterialTextures {
@@ -137,16 +144,16 @@ enum IBLLoader {
             return PBRMaterialTextures(albedo: a, normal: n, roughness: r)
         }
 
-        let sky = try hdrTex("sky_equirect", expected: .rgba16Float)
-        let irr = try hdrTex("irradiance_equirect", expected: .rgba16Float)
-        let brdf = try hdrTex("brdf_lut", expected: .rg16Float)
+        let (sky, skyURL) = try hdrTex("sky_equirect", expected: .rgba16Float)
+        let (irr, _) = try hdrTex("irradiance_equirect", expected: .rgba16Float)
+        let (brdf, _) = try hdrTex("brdf_lut", expected: .rg16Float)
         let asphalt = try material("asphalt")
         let concrete = try material("concrete")
         let glass = try material("glass")
 
         var mipImages: [MTLTexture] = []
         for i in 0..<5 {
-            let t = try hdrTex("specular_m\(i)", expected: .rgba16Float)
+            let (t, _) = try hdrTex("specular_m\(i)", expected: .rgba16Float)
             mipImages.append(t)
         }
         guard mipImages.count == 5 else {
@@ -154,6 +161,13 @@ enum IBLLoader {
         }
         guard let specular = makeSpecularArray(device: device, mips: mipImages) else {
             throw IBLLoadError.specularPackFailed
+        }
+
+        // Measure sky HDR peak from the loaded rgba16f texture (authoritative).
+        let measuredSkyPeak = maxChannelPeak(of: sky)
+        print(String(format: "IBLLoader SKY peak measured=%.3f path=%@", measuredSkyPeak, skyURL.path))
+        if measuredSkyPeak < 2.0 {
+            print("IBLLoader WARN: sky peak < 2 — KTX may be LDR / tonemapped")
         }
 
         var config = LightingConfig()
@@ -170,10 +184,21 @@ enum IBLLoader {
                 if let v = json["iblIntensity"] as? Double { config.iblIntensity = Float(v) }
                 if let v = json["shadowBias"] as? Double { config.shadowBias = Float(v) }
                 if let v = json["specularMips"] as? Int { config.specularMips = Float(v) }
-                if let v = json["irradiancePeak"] as? Double { config.irradiancePeak = Float(v) }
+                // Prefer skyPeak; irradiancePeak historically held diffuse-only (~1.5) and misled the HUD.
+                if let v = json["skyPeak"] as? Double {
+                    config.irradiancePeak = Float(v)
+                } else if let v = json["irradiancePeak"] as? Double {
+                    config.irradiancePeak = Float(v)
+                }
             }
         } else {
             print("IBLLoader WARN: lighting.json fehlt — Default-Sonne")
+        }
+        // Prefer measured sky texture peak for the smoke HUD (must be >> 1 for real HDR).
+        if measuredSkyPeak > 1.0 {
+            config.irradiancePeak = measuredSkyPeak
+        } else if config.irradiancePeak < 2.0 {
+            print("IBLLoader WARN: sky peak gemessen=\(measuredSkyPeak) json=\(config.irradiancePeak) — HDR verdächtig")
         }
 
         guard let white = makeSolidTexture(device: device, color: SIMD4(1, 1, 1, 1)),
@@ -182,7 +207,7 @@ enum IBLLoader {
             throw IBLLoadError.solidTextureFailed
         }
 
-        print("IBLLoader OK: sky=\(sky.width)x\(sky.height) \(sky.pixelFormat.rawValue) irrPeak=\(config.irradiancePeak) specularLayers=\(specular.arrayLength)")
+        print("IBLLoader OK: sky=\(sky.width)x\(sky.height) rgba16Float iblPeak=\(config.irradiancePeak) specularLayers=\(specular.arrayLength)")
 
         let bytes = estimateBytes(textures: [
             sky, irr, specular, brdf,
@@ -207,6 +232,39 @@ enum IBLLoader {
             midRoughness: grayR,
             approximateTextureBytes: bytes
         )
+    }
+
+    /// Scan rgba16f / rg16f texture for max channel value (shared storage).
+    private static func maxChannelPeak(of texture: MTLTexture) -> Float {
+        let w = texture.width
+        let h = texture.height
+        let channels: Int
+        switch texture.pixelFormat {
+        case .rgba16Float: channels = 4
+        case .rg16Float: channels = 2
+        default: return 0
+        }
+        var bytes = [UInt16](repeating: 0, count: w * h * channels)
+        bytes.withUnsafeMutableBytes { buf in
+            texture.getBytes(
+                buf.baseAddress!,
+                bytesPerRow: w * channels * MemoryLayout<UInt16>.size,
+                from: MTLRegionMake2D(0, 0, w, h),
+                mipmapLevel: 0
+            )
+        }
+        var peak: Float = 0
+        // Subsample for large maps (sky 1024×512) — still hits the sun disk densely enough.
+        let step = max(1, (w * h) / 200_000)
+        var i = 0
+        while i < w * h {
+            let base = i * channels
+            for c in 0..<min(3, channels) {
+                peak = max(peak, abs(Float(Float16(bitPattern: bytes[base + c]))))
+            }
+            i += step
+        }
+        return peak
     }
 
     private static func estimateBytes(textures: [MTLTexture]) -> Int {
@@ -334,77 +392,45 @@ enum IBLLoader {
         return texture
     }
 
-    /// Pack specular mips into a 2D array. Metal requires identical layer sizes — upsample smaller mips.
+    /// Pack specular roughness layers into a 2D array. Bake must use identical layer sizes.
     private static func makeSpecularArray(device: MTLDevice, mips: [MTLTexture]) -> MTLTexture? {
         guard let first = mips.first else { return nil }
-        let maxW = mips.map(\.width).max() ?? first.width
-        let maxH = mips.map(\.height).max() ?? first.height
+        let w = first.width
+        let h = first.height
+        guard mips.allSatisfy({ $0.width == w && $0.height == h && $0.pixelFormat == .rgba16Float }) else {
+            print("IBLLoader ERROR: specular layers must share size/format (got \(mips.map { "\($0.width)x\($0.height)" }))")
+            return nil
+        }
         let desc = MTLTextureDescriptor()
         desc.textureType = .type2DArray
         desc.pixelFormat = .rgba16Float
-        desc.width = maxW
-        desc.height = maxH
+        desc.width = w
+        desc.height = h
         desc.arrayLength = mips.count
         desc.mipmapLevelCount = 1
         desc.usage = [.shaderRead]
         desc.storageMode = .shared
         guard let array = device.makeTexture(descriptor: desc) else { return nil }
 
+        var bytes = [UInt16](repeating: 0, count: w * h * 4)
         for (i, src) in mips.enumerated() {
-            if src.width == maxW, src.height == maxH {
-                var bytes = [UInt16](repeating: 0, count: maxW * maxH * 4)
-                bytes.withUnsafeMutableBytes { buf in
-                    src.getBytes(
-                        buf.baseAddress!,
-                        bytesPerRow: maxW * 8,
-                        from: MTLRegionMake2D(0, 0, maxW, maxH),
-                        mipmapLevel: 0
-                    )
-                }
-                bytes.withUnsafeBytes { buf in
-                    array.replace(
-                        region: MTLRegionMake2D(0, 0, maxW, maxH),
-                        mipmapLevel: 0,
-                        slice: i,
-                        withBytes: buf.baseAddress!,
-                        bytesPerRow: maxW * 8,
-                        bytesPerImage: maxW * maxH * 8
-                    )
-                }
-            } else {
-                // Nearest upsample rgba16f into full layer
-                var srcBytes = [UInt16](repeating: 0, count: src.width * src.height * 4)
-                srcBytes.withUnsafeMutableBytes { buf in
-                    src.getBytes(
-                        buf.baseAddress!,
-                        bytesPerRow: src.width * 8,
-                        from: MTLRegionMake2D(0, 0, src.width, src.height),
-                        mipmapLevel: 0
-                    )
-                }
-                var dst = [UInt16](repeating: 0, count: maxW * maxH * 4)
-                for y in 0..<maxH {
-                    let sy = min(src.height - 1, y * src.height / maxH)
-                    for x in 0..<maxW {
-                        let sx = min(src.width - 1, x * src.width / maxW)
-                        let si = (sy * src.width + sx) * 4
-                        let di = (y * maxW + x) * 4
-                        dst[di] = srcBytes[si]
-                        dst[di + 1] = srcBytes[si + 1]
-                        dst[di + 2] = srcBytes[si + 2]
-                        dst[di + 3] = srcBytes[si + 3]
-                    }
-                }
-                dst.withUnsafeBytes { buf in
-                    array.replace(
-                        region: MTLRegionMake2D(0, 0, maxW, maxH),
-                        mipmapLevel: 0,
-                        slice: i,
-                        withBytes: buf.baseAddress!,
-                        bytesPerRow: maxW * 8,
-                        bytesPerImage: maxW * maxH * 8
-                    )
-                }
+            bytes.withUnsafeMutableBytes { buf in
+                src.getBytes(
+                    buf.baseAddress!,
+                    bytesPerRow: w * 8,
+                    from: MTLRegionMake2D(0, 0, w, h),
+                    mipmapLevel: 0
+                )
+            }
+            bytes.withUnsafeBytes { buf in
+                array.replace(
+                    region: MTLRegionMake2D(0, 0, w, h),
+                    mipmapLevel: 0,
+                    slice: i,
+                    withBytes: buf.baseAddress!,
+                    bytesPerRow: w * 8,
+                    bytesPerImage: w * h * 8
+                )
             }
         }
         array.label = "specular_ibl_array"

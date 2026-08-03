@@ -2,13 +2,15 @@
   "runtime_dir": "city of surf/Resources/Lighting",
   "cache_dir": "Assets/_cache",
   "source_dir": "Assets",
-  "runtime_resolution": 2048,
+  "runtime_resolution": 1024,
   "ibl": {
     "cube_size": 128,
     "irradiance_size": 32,
     "specular_size": 64,
     "specular_mips": 5,
-    "brdf_lut_size": 128
+    "brdf_lut_size": 128,
+    "sky_width": 1024,
+    "sky_height": 512
   },
   "assets": [
     {

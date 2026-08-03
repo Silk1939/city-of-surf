@@ -50,6 +50,32 @@ static float crest_lip(float rz, float faceWidth)
     return exp(-(rz * rz) / (2.0 * sigma * sigma));
 }
 
+/// Narrower lip used only for foam — geometry crest stays wider.
+static float foam_crest_lip(float rz, float faceWidth)
+{
+    float sigma = max(faceWidth * 0.042, 0.65);
+    return exp(-(rz * rz) / (2.0 * sigma * sigma));
+}
+
+static float hash21(float2 p)
+{
+    float3 p3 = fract(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+static float valueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = fract(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + float2(1.0, 0.0));
+    float c = hash21(i + float2(0.0, 1.0));
+    float d = hash21(i + float2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread float &foam)
 {
     float rz = pos.z + frame.scrollZ;
@@ -71,7 +97,13 @@ static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread f
     d.y += chop;
     d.x += frame.rippleAmplitude * 0.15 * cos(rk * pos.x - frame.time * 3.0) * body;
 
-    foam = saturate(lip * 0.85 + faceMask * 0.55);
+    // Foam: almost only a thin crest line; tiny face bleed + chunky stylized noise.
+    float foamLip = foam_crest_lip(rz, frame.waveLength);
+    float n0 = valueNoise(pos.xz * 0.35 + float2(frame.time * 0.55, frame.time * 0.25));
+    float n1 = valueNoise(pos.xz * 0.9 + float2(-frame.time * 0.7, frame.time * 0.4));
+    float chunk = step(0.42, n0 * 0.55 + n1 * 0.45);
+    foam = saturate(foamLip * 1.2 + faceMask * 0.08) * mix(0.15, 1.0, chunk);
+    foam = step(0.28, foam); // hard stylized foam edge
     return pos + d;
 }
 
@@ -129,13 +161,19 @@ static float geometrySmith(float3 N, float3 V, float3 L, float roughness)
 static float shadowPCF(float4 shadowCoord,
                        depth2d<float> shadowMap,
                        sampler shadowSampler,
-                       float bias)
+                       float constantBias,
+                       float3 N,
+                       float3 L)
 {
     float3 proj = shadowCoord.xyz / max(shadowCoord.w, 1e-5);
     float2 uv = proj.xy * 0.5 + 0.5;
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return 1.0;
     }
+    // Slope-scaled bias: stronger when the receiver faces away from the light.
+    float ndotl = saturate(dot(normalize(N), normalize(L)));
+    float sinTheta = sqrt(max(1.0 - ndotl * ndotl, 0.0));
+    float bias = constantBias * (1.0 + 12.0 * sinTheta);
     float depth = proj.z;
     float shadow = 0.0;
     float2 texel = 1.0 / float2(shadowMap.get_width(), shadowMap.get_height());
@@ -148,6 +186,19 @@ static float shadowPCF(float4 shadowCoord,
     return shadow / 9.0;
 }
 
+/// Push receiver along normal before light-space projection (reduces acne on slopes).
+static float4 shadowCoordWithNormalOffset(float3 worldPos,
+                                          float3 N,
+                                          float3 L,
+                                          constant FrameUniforms &frame,
+                                          float baseOffset)
+{
+    float ndotl = saturate(dot(normalize(N), normalize(L)));
+    float offset = baseOffset + (1.0 - ndotl) * baseOffset * 2.0;
+    float3 biased = worldPos + normalize(N) * offset;
+    return frame.lightViewProjectionMatrix * float4(biased, 1.0);
+}
+
 static float3 tonemapACES(float3 x)
 {
     const float a = 2.51;
@@ -156,6 +207,25 @@ static float3 tonemapACES(float3 x)
     const float d = 0.59;
     const float e = 0.14;
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
+}
+
+/// CITY SURFER grade — warm fog, saturation punch, vignette — then ACES.
+static float3 artGradeAndTonemap(float3 hdr, float2 ndc, float fogAmount)
+{
+    float3 fogWarm = float3(1.0, 0.55, 0.22) * 1.25;
+    hdr = mix(hdr, fogWarm, saturate(fogAmount));
+    float luma = dot(hdr, float3(0.2126, 0.7152, 0.0722));
+    hdr = mix(float3(luma), hdr, 1.22); // +22% saturation punch
+    float r2 = dot(ndc, ndc);
+    float vig = saturate(1.0 - r2 * 0.55);
+    hdr *= mix(0.72, 1.0, vig); // soft vignette
+    return tonemapACES(hdr);
+}
+
+static float2 worldToNdc(float3 worldPos, constant FrameUniforms &frame)
+{
+    float4 clip = frame.viewProjectionMatrix * float4(worldPos, 1.0);
+    return clip.xy / max(clip.w, 1e-5);
 }
 
 static float3 applyNormalMap(float3 N, float3 mapSample, float3 worldPos, float2 uv)
@@ -240,16 +310,33 @@ fragment float4 skyFragment(SkyOut in [[stage_in]],
                             constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
                             texture2d<float> sky [[texture(TextureIndexSky)]])
 {
-    constexpr sampler s(s_address::repeat, t_address::clamp_to_edge, filter::linear);
-    // NDC from fullscreen triangle; Metal clip space z near≈0 far≈1 — use far plane for sky ray.
+    // Procedural CITY SURFER sunset — HDRI kept for IBL/reflections elsewhere.
     float2 ndc = in.uv * 2.0 - 1.0;
     float4 nearP = frame.invViewProjectionMatrix * float4(ndc, 0.0, 1.0);
     float4 farP  = frame.invViewProjectionMatrix * float4(ndc, 1.0, 1.0);
     float3 nearW = nearP.xyz / max(nearP.w, 1e-5);
     float3 farW  = farP.xyz / max(farP.w, 1e-5);
     float3 dir = normalize(farW - nearW);
-    float3 col = sampleEquirect(sky, s, dir) * frame.iblIntensity;
-    return float4(tonemapACES(col), 1.0);
+
+    // #FF7A2F horizon → #4A3B8C zenith
+    float3 horizon = float3(1.0, 0.478, 0.184);
+    float3 zenith = float3(0.290, 0.231, 0.549);
+    float elev = saturate(dir.y * 0.5 + 0.5);
+    float3 col = mix(horizon, zenith, pow(elev, 0.85));
+    // Warm haze near horizon
+    col = mix(col, horizon * 1.35, saturate(1.0 - abs(dir.y) * 2.2) * 0.55);
+
+    float3 sunDir = normalize(frame.lightDirection);
+    float sunDot = saturate(dot(dir, sunDir));
+    // Large soft sun disk + glow (stylized, not HDRI sun)
+    float disk = pow(sunDot, 180.0);
+    float glow = pow(sunDot, 12.0) * 1.8 + pow(sunDot, 4.0) * 0.55;
+    float3 sunCol = frame.lightColor * frame.sunIntensity;
+    col += sunCol * (disk * 6.0 + glow);
+    col += float3(1.0, 0.95, 0.7) * disk * 8.0;
+
+    float2 ndcGrade = in.uv * 2.0 - 1.0;
+    return float4(artGradeAndTonemap(col, ndcGrade, 0.08), 1.0);
 }
 
 vertex VOut solidVertex(Vertex in [[stage_in]],
@@ -263,7 +350,6 @@ vertex VOut solidVertex(Vertex in [[stage_in]],
     out.texCoord = in.texCoord;
     out.foam = 0.0;
     out.materialId = object.materialId;
-    out.shadowCoord = frame.lightViewProjectionMatrix * world;
 
     float3x3 normalMatrix = float3x3(object.modelMatrix[0].xyz,
                                      object.modelMatrix[1].xyz,
@@ -274,6 +360,8 @@ vertex VOut solidVertex(Vertex in [[stage_in]],
     else if (lp.z > lp.y && lp.z > lp.x) nLocal = float3(0, 0, sign(in.position.z));
     else nLocal = float3(0, sign(in.position.y), 0);
     out.normal = normalize(normalMatrix * nLocal);
+    out.shadowCoord = shadowCoordWithNormalOffset(
+        world.xyz, out.normal, frame.lightDirection, frame, 0.06);
     return out;
 }
 
@@ -313,55 +401,69 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         roughness = roughnessMap.sample(matSampler, uv).r;
     }
 
-    // Road wetness boost
+    // Road wetness + sunset glitter path down the street center
     if (object.materialId > 0.5 && object.materialId < 1.5) {
         float center = 1.0 - smoothstep(0.08, 0.22, abs(in.worldPos.x));
         float dash = step(0.45, fract(in.worldPos.z * 0.1));
         albedo = mix(albedo, float3(0.95, 0.9, 0.55), center * dash * 0.35);
-        roughness = clamp(roughness * 0.55, 0.08, 0.7);
-        metallic = 0.05;
+        roughness = clamp(roughness * 0.45, 0.06, 0.55);
+        metallic = 0.08;
+        // Warm wet reflection strip toward the sun
+        float glitter = pow(saturate(dot(normalize(float3(0.0, 0.15, 1.0)), L)), 8.0) * center;
+        albedo += frame.lightColor * glitter * 0.55;
     }
 
-    // Glass/facade buildings (materialId 6): lean specular, keep Facade001 maps
+    // Glass/facade buildings (materialId 6): warm stylized facades + window glow
     if (object.materialId > 5.5 && object.materialId < 6.5) {
-        roughness = clamp(roughness * 0.85, 0.05, 0.55);
-        metallic = 0.25;
-        float facing = saturate(abs(N.x) * 0.85 + abs(N.z) * 0.85);
-        float lit = step(0.4, fract(sin(dot(floor(in.worldPos.xyz * float3(0.35, 0.55, 0.35)), float3(12.1, 78.2, 45.3))) * 43758.5));
-        albedo += float3(1.0, 0.82, 0.45) * lit * facing * 0.12;
-    }
-
-    // Legacy concrete building window mix (materialId 2) if still used
-    if (object.materialId > 1.5 && object.materialId < 2.5) {
-        float facing = saturate(abs(N.x) * 0.85 + abs(N.z) * 0.85);
+        // Prefer art-directed tint over gray PBR albedo.
+        albedo = mix(albedo, object.color.rgb, 0.82);
+        roughness = clamp(roughness * 0.7, 0.12, 0.55);
+        metallic = 0.08;
+        float sunFacing = saturate(dot(N, L));
+        // Lit sides get warm sunset wash (# sunSideWarm).
+        albedo = mix(albedo, albedo * float3(1.15, 0.85, 0.55), sunFacing * 0.55);
+        float facing = saturate(abs(N.x) * 0.9 + abs(N.z) * 0.9);
         float wx = fract(in.worldPos.y * 0.55);
-        float wz = fract((abs(N.x) > 0.5 ? in.worldPos.z : in.worldPos.x) * 0.35);
-        float window = step(0.18, wx) * step(wx, 0.82) * step(0.2, wz) * step(wz, 0.8) * facing;
-        albedo = mix(albedo, albedo * 0.15 + float3(0.05, 0.08, 0.1), window * 0.85);
-        roughness = mix(roughness, 0.12, window);
-        metallic = mix(metallic, 0.35, window);
+        float wz = fract((abs(N.x) > 0.5 ? in.worldPos.z : in.worldPos.x) * 0.38);
+        float window = step(0.16, wx) * step(wx, 0.84) * step(0.18, wz) * step(wz, 0.82) * facing;
+        float lit = step(0.55, fract(sin(dot(floor(in.worldPos.xyz * float3(0.35, 0.55, 0.35)), float3(12.1, 78.2, 45.3))) * 43758.5));
+        albedo = mix(albedo, albedo * 0.12, window * 0.9);
+        albedo += float3(1.0, 0.78, 0.35) * lit * window * 0.55;
     }
 
-    // Coins / neon surfer accents stay glossy
+    // Sidewalks / concrete slabs — no building window grid.
+    if (object.materialId > 1.5 && object.materialId < 2.5) {
+        albedo = mix(albedo, object.color.rgb, 0.35);
+        roughness = clamp(roughness * 0.9, 0.35, 0.85);
+        metallic = 0.0;
+    }
+
+    // Coins — hot gold emissive disks
     if (object.materialId > 4.5 && object.materialId < 5.5) {
-        albedo = float3(1.0, 0.82, 0.15);
-        roughness = 0.2;
-        metallic = 0.85;
+        albedo = object.color.rgb;
+        roughness = 0.12;
+        metallic = 0.95;
     } else if (object.materialId > 2.5 && object.materialId < 3.5) {
-        roughness = 0.35;
-        metallic = 0.15;
+        // Surfer / board / neon — stylized, not gray PBR
+        albedo = object.color.rgb;
+        roughness = 0.28;
+        metallic = 0.2;
     } else if (object.materialId > 3.5 && object.materialId < 4.5) {
         roughness = 0.45;
         metallic = 0.2;
+        albedo = mix(albedo, object.color.rgb, 0.85);
     }
 
     float shadow = 1.0;
     if (object.receivesShadow > 0.5) {
-        shadow = shadowPCF(in.shadowCoord, shadowMap, shadowSampler, frame.shadowBias);
-        shadow = mix(0.35, 1.0, shadow);
+        shadow = shadowPCF(in.shadowCoord, shadowMap, shadowSampler, frame.shadowBias, N, L);
+        shadow = mix(0.6, 1.0, shadow);
     }
 
     float3 irradiance = sampleEquirect(irradianceMap, iblSampler, N);
+    // Warm stylized IBL — bias cool HDRI toward sunset horizon.
+    float3 warmBias = float3(1.0, 0.55, 0.22);
+    irradiance = mix(irradiance, irradiance * warmBias * 1.4, 0.55);
     float3 R = reflect(-V, N);
     float mip = roughness * max(frame.specularMips - 1.0, 1.0);
     uint layer0 = uint(floor(mip));
@@ -370,18 +472,42 @@ fragment float4 solidFragment(VOut in [[stage_in]],
     float3 spec0 = specularMap.sample(iblSampler, dirToEquirect(R), layer0).rgb;
     float3 spec1 = specularMap.sample(iblSampler, dirToEquirect(R), layer1).rgb;
     float3 prefiltered = mix(spec0, spec1, mipF);
+    prefiltered = mix(prefiltered, prefiltered * warmBias * 1.5, 0.4);
     float2 brdf = brdfLUT.sample(iblSampler, float2(max(dot(N, V), 0.0), roughness)).rg;
 
     float3 color = pbrLit(albedo, clamp(roughness, 0.04, 1.0), metallic, N, V, L,
                           frame.lightColor, frame.sunIntensity, shadow,
                           irradiance, prefiltered, brdf, frame.iblIntensity);
 
+    // Neon rim with fixed warm/neon punch (black suit alone would kill rim).
+    if (object.materialId > 2.5 && object.materialId < 3.5) {
+        float rim = pow(1.0 - saturate(dot(N, V)), 2.0);
+        float3 rimCol = mix(float3(0.45, 0.98, 0.18), object.color.rgb, 0.45);
+        color += rimCol * rim * 1.15;
+        color += object.color.rgb * 0.18;
+    }
+    if (object.materialId > 4.5 && object.materialId < 5.5) {
+        float pulse = 0.55 + 0.45 * sin(frame.time * 7.0 + in.worldPos.x * 2.0);
+        color += object.color.rgb * pulse * 1.1;
+        float rim = pow(1.0 - saturate(dot(N, V)), 1.4);
+        color += float3(1.0, 0.92, 0.35) * rim * 1.35;
+        float glint = pow(saturate(dot(N, normalize(L + V))), 64.0);
+        color += float3(1.0, 0.95, 0.6) * glint * 2.2;
+    }
+    // Traffic-light / hazard emissive boost when color is saturated neon-ish
+    if (object.materialId > 3.5 && object.materialId < 4.5) {
+        float chroma = max(object.color.r, max(object.color.g, object.color.b))
+                     - min(object.color.r, min(object.color.g, object.color.b));
+        if (chroma > 0.35) {
+            float pulse = 0.7 + 0.3 * sin(frame.time * 8.0);
+            color += object.color.rgb * pulse * 0.85;
+        }
+    }
+
     // Fog in linear HDR (not LDR 0–1) so distant highlights aren't crushed before ACES.
-    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 40.0) / 130.0);
-    float3 fogCol = frame.lightColor * frame.sunIntensity * 0.45 + float3(0.35, 0.12, 0.04);
-    color = mix(color, fogCol, fog * 0.55);
-    // Tonemap is the only display clamp — keep linear HDR until here.
-    return float4(tonemapACES(color), 1.0);
+    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 120.0);
+    float2 ndc = worldToNdc(in.worldPos, frame);
+    return float4(artGradeAndTonemap(color, ndc, fog * 0.55), 1.0);
 }
 
 vertex VOut waveVertex(Vertex in [[stage_in]],
@@ -398,7 +524,9 @@ vertex VOut waveVertex(Vertex in [[stage_in]],
     out.texCoord = in.texCoord;
     out.foam = foam;
     out.materialId = 0.0;
-    out.shadowCoord = frame.lightViewProjectionMatrix * float4(displaced, 1.0);
+    // Larger normal offset on water — large sloping face is acne-prone.
+    out.shadowCoord = shadowCoordWithNormalOffset(
+        displaced, out.normal, frame.lightDirection, frame, 0.18);
     return out;
 }
 
@@ -417,35 +545,52 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float3 N = normalize(in.normal);
     float3 V = normalize(frame.cameraPosition - in.worldPos);
     float3 L = normalize(frame.lightDirection);
-    float fresnel = pow(1.0 - saturate(dot(N, V)), 2.8);
+    float fresnel = pow(1.0 - saturate(dot(N, V)), 2.4);
 
-    float3 deep = float3(0.02, 0.22, 0.32);
-    float3 mid = float3(0.06, 0.55, 0.62);
-    float3 shallow = float3(0.25, 0.88, 0.85);
+    // CITY SURFER water — saturated teal/aqua (#0A6E7E / #14B8C4 / #5FE8DC)
+    float3 deep = float3(0.039, 0.431, 0.494);
+    float3 mid = float3(0.078, 0.722, 0.769);
+    float3 shallow = float3(0.373, 0.910, 0.863);
     float h = saturate(in.worldPos.y / max(frame.waveAmplitude, 0.001));
-    float3 water = mix(deep, mid, smoothstep(0.0, 0.45, h));
-    water = mix(water, shallow, smoothstep(0.45, 1.0, h));
+    float3 water = mix(deep, mid, smoothstep(0.0, 0.4, h));
+    water = mix(water, shallow, smoothstep(0.4, 0.95, h));
 
-    float3 foamCol = float3(0.95, 0.98, 1.0);
-    float foamAmt = pow(saturate(in.foam), 1.1);
-    water = mix(water, foamCol, foamAmt * 0.98);
+    // Chunky pure-white foam (hard edge from vertex).
+    float foamAmt = step(0.5, in.foam);
+    water = mix(water, float3(1.0, 1.0, 1.0), foamAmt);
 
-    float shadow = shadowPCF(in.shadowCoord, shadowMap, shadowSampler, frame.shadowBias);
-    shadow = mix(0.4, 1.0, shadow);
+    // Soft street-edge darkening (no shadow map).
+    float edge = saturate((abs(in.worldPos.x) - 4.5) / 6.5);
+    float edgeShade = mix(1.0, 0.78, edge * edge);
 
+    // Orange sky fresnel on teal = reference signature contrast.
     float3 R = reflect(-V, N);
-    float3 env = sampleEquirect(sky, iblSampler, R);
+    float skyElev = saturate(R.y * 0.5 + 0.5);
+    float3 skyHorizon = float3(1.0, 0.478, 0.184);
+    float3 skyZenith = float3(0.290, 0.231, 0.549);
+    float3 skyCol = mix(skyHorizon, skyZenith, pow(skyElev, 0.85));
+    float sunDot = saturate(dot(normalize(R), L));
+    skyCol += frame.lightColor * frame.sunIntensity * (pow(sunDot, 24.0) * 2.5 + pow(sunDot, 6.0) * 0.6);
+    water = water * edgeShade + skyCol * fresnel * 0.55;
+
+    // Sun glitter path down the flooded street (art-ref signature).
+    float street = 1.0 - smoothstep(0.5, 4.0, abs(in.worldPos.x));
+    float sparkle = hash21(floor(in.worldPos.xz * 1.8 + float2(frame.time * 3.0, 0.0)));
+    float glitterPath = street * pow(saturate(dot(N, L)), 3.0);
+    glitterPath *= 0.45 + 0.55 * sin(in.worldPos.z * 1.7 + frame.time * 5.0);
+    glitterPath += street * pow(sunDot, 10.0) * step(0.62, sparkle) * 1.4;
+    water += frame.lightColor * glitterPath * frame.sunIntensity * 0.5;
+
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
-    water = water * (0.45 + 0.55 * shadow) + fresnel * env * frame.iblIntensity * 0.65;
-    water += irr * 0.12 * frame.iblIntensity;
+    irr = mix(irr, irr * float3(1.0, 0.55, 0.22) * 1.3, 0.5);
+    water += irr * 0.04 * frame.iblIntensity;
 
     float ndotl = saturate(dot(N, L));
     float3 H = normalize(L + V);
-    float spec = pow(saturate(dot(N, H)), 72.0) * (0.4 + 0.6 * fresnel);
-    water += spec * frame.lightColor * frame.sunIntensity * 0.35 * shadow;
+    float spec = pow(saturate(dot(N, H)), 48.0) * (0.35 + 0.65 * fresnel);
+    water += spec * frame.lightColor * frame.sunIntensity * 0.4 * edgeShade;
 
-    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 40.0) / 140.0);
-    float3 fogCol = frame.lightColor * frame.sunIntensity * 0.45 + float3(0.35, 0.12, 0.04);
-    water = mix(water, fogCol, fog * 0.5);
-    return float4(tonemapACES(water), 1.0);
+    float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 130.0);
+    float2 ndc = worldToNdc(in.worldPos, frame);
+    return float4(artGradeAndTonemap(water, ndc, fog * 0.5), 1.0);
 }

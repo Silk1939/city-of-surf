@@ -31,9 +31,9 @@ final class ShadowMap {
         // Place light along sun direction looking at focus.
         let eye = focus + L * 55
         let view = Math.lookAt(eye: eye, target: focus, up: SIMD3(0, 1, 0))
-        let extent: Float = 42
+        let extent: Float = 48
         let near: Float = 1
-        let far: Float = 120
+        let far: Float = 140
         let proj = Math.orthographic(
             left: -extent,
             right: extent,

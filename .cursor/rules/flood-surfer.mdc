@@ -42,3 +42,12 @@ In this codebase those mean:
 - Match existing Swift/Metal style in the repo.
 - Keep draw submission on the Metal 4 path already established in `Renderer.swift`.
 - Prefer small, compile-checked steps over large rewrites.
+
+## Art direction (CITY SURFER)
+- Target look: **stylized & saturated** (sunset drama), **not** photoreal / premium-realistic.
+- Reference: concept art — orange→violet sky, chunky turquoise water, warm terracotta buildings, neon accents, readable wave slope.
+- Palette / knobs: `Render/ArtDirection.swift`; keep shader literals in sync when changing look.
+- Water: **no shadow-map receive** — soft street-edge darkening only; stylized color over contact shadows.
+- Sky display: procedural sunset gradient + sun glow via `invViewProjection`; HDRI for IBL/reflections.
+- **Stabilization (2026-08-03):** wave defaults stay small (`amplitude≈2.4`) until camera+sky are co-scaled for a larger flood. Never hard-init `smoothEye` underwater — use snap-on-first-frame.
+- After look changes: `make device-build` and compare device screenshots to the art reference.

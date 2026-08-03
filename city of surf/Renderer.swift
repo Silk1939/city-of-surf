@@ -10,7 +10,7 @@ import simd
 import QuartzCore
 
 let maxBuffersInFlight = 3
-let maxObjectsPerFrame = 320
+let maxObjectsPerFrame = 420
 
 nonisolated enum RendererError: Error {
     case badVertexDescriptor
@@ -67,10 +67,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     let unitBox: MTKMesh
     let waveMesh: MTKMesh
     let surferMesh: MTKMesh
+    let coinMesh: MTKMesh
 
     private var lastTime: CFTimeInterval = CACurrentMediaTime()
     private var fpsAccum: Float = 0
     private var fpsFrames: Int = 0
+    private var waveShapeLogAccum: Float = 0
+    private var lastWasGameOver = false
 
     @MainActor
     init?(metalKitView: MTKView, gameState: GameState) {
@@ -233,6 +236,15 @@ final class Renderer: NSObject, MTKViewDelegate {
                 dimensions: SIMD3(0.55, 1.45, 0.4),
                 vertexDescriptor: vd
             )
+            // Upright thin disk (Y axis) — spun around Y like classic pickup coins.
+            coinMesh = try MeshFactory.makeCylinder(
+                device: device,
+                height: 0.14,
+                radius: 0.55,
+                radialSegments: 20,
+                verticalSegments: 1,
+                vertexDescriptor: vd
+            )
         } catch {
             fail("MeshFactory: \(error.localizedDescription)")
             return nil
@@ -245,7 +257,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             return nil
         }
         rs.addAllocations([frameUniformBuffer, objectUniformBuffer, shadowMap.texture])
-        for mesh in [unitBox, waveMesh, surferMesh] {
+        for mesh in [unitBox, waveMesh, surferMesh, coinMesh] {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
             rs.addAllocations(mesh.submeshes.map(\.indexBuffer.buffer))
         }
@@ -272,7 +284,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let mb = Float(totalBytes) / (1024 * 1024)
         gameState.debugTextureMemoryMB = mb
         // Soft budget for mid-range iPhones (KTX HDR + 2K PBR + shadow).
-        let warnMB: Float = 192
+        let warnMB: Float = 128
         gameState.debugTextureMemoryWarn = mb > warnMB
         if gameState.debugTextureMemoryWarn {
             print("[FloodSurfer Smoke] WARN texture memory ≈ \(String(format: "%.1f", mb)) MB > \(Int(warnMB)) MB budget")
@@ -455,7 +467,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             isWave: true,
             materialId: 0,
             castsShadow: false,
-            receivesShadow: true
+            receivesShadow: false
         ))
 
         // Surfer + board with lean
@@ -481,10 +493,23 @@ final class Renderer: NSObject, MTKViewDelegate {
         items.append(DrawItem(
             mesh: unitBox,
             modelMatrix: accent,
-            color: SIMD4(0.45, 0.98, 0.18, 1),
+            color: SIMD4(ArtDirection.neonGreen.x, ArtDirection.neonGreen.y, ArtDirection.neonGreen.z, 1),
             isWave: false,
             materialId: 3,
             castsShadow: true,
+            receivesShadow: true
+        ))
+        // Lightning bolt mark on the back (art ref)
+        let bolt = Math.translation(SIMD3(sp.x, sp.y + 0.05, sp.z + 0.22))
+            * leanRot
+            * Math.scale(SIMD3(0.22, 0.55, 0.08))
+        items.append(DrawItem(
+            mesh: unitBox,
+            modelMatrix: bolt,
+            color: SIMD4(ArtDirection.neonGreen.x, ArtDirection.neonGreen.y, ArtDirection.neonGreen.z, 1),
+            isWave: false,
+            materialId: 3,
+            castsShadow: false,
             receivesShadow: true
         ))
         let boardY = sp.y - sh * 0.5 + 0.08
@@ -494,12 +519,61 @@ final class Renderer: NSObject, MTKViewDelegate {
         items.append(DrawItem(
             mesh: unitBox,
             modelMatrix: board,
-            color: SIMD4(0.45, 0.95, 0.15, 1),
+            color: SIMD4(0.08, 0.08, 0.1, 1),
             isWave: false,
             materialId: 3,
             castsShadow: true,
             receivesShadow: true
         ))
+        let boardBolt = Math.translation(SIMD3(sp.x, boardY + 0.08, sp.z))
+            * leanRot
+            * Math.scale(SIMD3(0.35, 0.06, 1.4))
+        items.append(DrawItem(
+            mesh: unitBox,
+            modelMatrix: boardBolt,
+            color: SIMD4(ArtDirection.neonGreen.x, ArtDirection.neonGreen.y, ArtDirection.neonGreen.z, 1),
+            isWave: false,
+            materialId: 3,
+            castsShadow: false,
+            receivesShadow: true
+        ))
+
+        // Surfer wake spray — chunky stylized foam cubes trailing the board.
+        let spWake = state.surfer.position
+        for w in 0..<5 {
+            let t = Float(w) * 0.18
+            let wobble = sin(state.time * 14 + Float(w) * 1.7)
+            let wakePos = SIMD3(
+                spWake.x + wobble * 0.35,
+                spWake.y - state.surfer.currentHeight * 0.45 + 0.05,
+                spWake.z - 1.1 - t * 2.4
+            )
+            let s: Float = 0.35 - Float(w) * 0.04
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: Math.translation(wakePos) * Math.scale(SIMD3(s * 1.4, s * 0.5, s)),
+                color: SIMD4(0.95, 0.98, 1.0, 1),
+                isWave: false,
+                materialId: 3,
+                castsShadow: false,
+                receivesShadow: false
+            ))
+        }
+
+        // Collect / style sparks
+        for spark in state.fx.sparks {
+            let lifeT = max(0, spark.life / spark.maxLife)
+            let sc = spark.scale * (0.55 + 0.45 * lifeT)
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: Math.translation(spark.position) * Math.scale(SIMD3(sc, sc, sc)),
+                color: spark.color,
+                isWave: false,
+                materialId: 3,
+                castsShadow: false,
+                receivesShadow: false
+            ))
+        }
 
         // Coins early — never silently truncated by draw budget.
         let spin = state.time * 4.0
@@ -511,17 +585,18 @@ final class Renderer: NSObject, MTKViewDelegate {
                 time: state.time,
                 scrollZ: state.scrollZ
             )
+            // Cylinder tipped upright; worldPosition already includes hover height.
             let model = Math.translation(pos)
-                * Math.rotation(radians: spin + c.localZ, axis: SIMD3(0, 1, 0))
-                * Math.scale(SIMD3(1.15, 0.16, 1.15))
+                * Math.rotation(radians: spin + c.localZ * 0.15, axis: SIMD3(0, 1, 0))
+                * Math.rotation(radians: .pi * 0.5, axis: SIMD3(1, 0, 0))
             items.append(DrawItem(
-                mesh: unitBox,
+                mesh: coinMesh,
                 modelMatrix: model,
-                color: SIMD4(1.0, 0.84, 0.15, 1),
+                color: SIMD4(ArtDirection.coinGold.x, ArtDirection.coinGold.y, ArtDirection.coinGold.z, 1),
                 isWave: false,
                 materialId: 5,
                 castsShadow: false,
-                receivesShadow: true
+                receivesShadow: false
             ))
         }
 
@@ -539,22 +614,139 @@ final class Renderer: NSObject, MTKViewDelegate {
             appendObstacle(items: &items, kind: o.kind, at: pos, roll: rot, yaw: yaw)
         }
 
-        // Buildings last (lowest priority if budget ever tightens again)
-        let buildingSpacing: Float = 14
-        let base = -fmod(state.runDistance, buildingSpacing)
-        for i in 0..<12 {
-            let z = base + Float(i) * buildingSpacing - 8
-            let hL = 18 + Float((i * 3) % 9) * 3.5
-            let hR = 20 + Float((i * 5) % 8) * 3.8
-            let wL = 7.5 + Float(i % 3) * 0.8
-            let wR = 7.0 + Float((i + 1) % 3) * 0.9
-            let left = Math.translation(SIMD3(-12.5, hL * 0.5, z)) * Math.scale(SIMD3(wL, hL, 11))
-            let right = Math.translation(SIMD3(12.5, hR * 0.5, z)) * Math.scale(SIMD3(wR, hR, 11))
-            let tintL = SIMD4<Float>(1.0, 1.0, 1.0, 1)
-            let tintR = SIMD4<Float>(0.96, 0.97, 1.0, 1)
-            // materialId 6 = Facade001 glass/facade PBR (ambientCG)
+        // Buildings — irregular Manhattan block fronts (not a 14m picket fence).
+        func buildingHash(_ n: Int) -> Float {
+            var x = UInt32(bitPattern: Int32(n)) &* 747796405
+            x = (x ^ (x >> 16)) &* 2246822519
+            return Float(x & 0xFFFF) / 65535.0
+        }
+        let scroll = state.runDistance
+        var zCursor = -fmod(scroll, 120) - 20
+        var bi = 0
+        while zCursor < 160 && bi < 20 {
+            let hL = 16 + buildingHash(bi * 3) * 28
+            let hR = 18 + buildingHash(bi * 3 + 1) * 30
+            let wL = 6.5 + buildingHash(bi * 5) * 4.5
+            let wR = 6.0 + buildingHash(bi * 7 + 2) * 5.0
+            // Depth along street: short towers vs long block faces.
+            let depthL = 7 + buildingHash(bi * 11) * 14
+            let depthR = 7 + buildingHash(bi * 13 + 1) * 14
+            // Gap: often abutting (blockfront), sometimes alley / empty lot.
+            let gapRoll = buildingHash(bi * 17 + 3)
+            let gap: Float
+            if gapRoll < 0.35 {
+                gap = 0.4 // nearly touching
+            } else if gapRoll < 0.7 {
+                gap = 2.5 + buildingHash(bi * 19) * 5.0
+            } else {
+                gap = 10 + buildingHash(bi * 23) * 14 // empty lot breaks periodicity
+            }
+            let zL = zCursor + depthL * 0.5
+            let zR = zCursor + depthR * 0.5 + (buildingHash(bi * 29) - 0.5) * 3.0
+            let left = Math.translation(SIMD3(-12.5, hL * 0.5, zL)) * Math.scale(SIMD3(wL, hL, depthL))
+            let right = Math.translation(SIMD3(12.5, hR * 0.5, zR)) * Math.scale(SIMD3(wR, hR, depthR))
+            let tint3L = ArtDirection.buildingTint(index: bi)
+            let tint3R = ArtDirection.buildingTint(index: bi + 3)
+            let tintL = SIMD4(tint3L.x, tint3L.y, tint3L.z, 1)
+            let tintR = SIMD4(tint3R.x, tint3R.y, tint3R.z, 1)
             items.append(DrawItem(mesh: unitBox, modelMatrix: left, color: tintL, isWave: false, materialId: 6, castsShadow: true, receivesShadow: true))
             items.append(DrawItem(mesh: unitBox, modelMatrix: right, color: tintR, isWave: false, materialId: 6, castsShadow: true, receivesShadow: true))
+
+            // Chunky rooftop palms / water towers — silhouette variety from the art ref.
+            if buildingHash(bi * 41) > 0.55 {
+                let palmX: Float = -12.5 + (buildingHash(bi * 43) - 0.5) * wL * 0.4
+                let palmBase = Math.translation(SIMD3(palmX, hL + 1.2, zL))
+                items.append(DrawItem(
+                    mesh: unitBox,
+                    modelMatrix: palmBase * Math.scale(SIMD3(0.35, 2.4, 0.35)),
+                    color: SIMD4(0.35, 0.22, 0.12, 1),
+                    isWave: false,
+                    materialId: 4,
+                    castsShadow: true,
+                    receivesShadow: true
+                ))
+                items.append(DrawItem(
+                    mesh: unitBox,
+                    modelMatrix: palmBase * Math.translation(SIMD3(0, 1.6, 0)) * Math.scale(SIMD3(2.2, 0.55, 2.2)),
+                    color: SIMD4(0.12, 0.55, 0.22, 1),
+                    isWave: false,
+                    materialId: 4,
+                    castsShadow: true,
+                    receivesShadow: true
+                ))
+            }
+            if buildingHash(bi * 47) > 0.7 {
+                let tower = Math.translation(SIMD3(12.5, hR + 1.5, zR)) * Math.scale(SIMD3(1.6, 2.2, 1.6))
+                items.append(DrawItem(
+                    mesh: unitBox,
+                    modelMatrix: tower,
+                    color: SIMD4(0.55, 0.52, 0.48, 1),
+                    isWave: false,
+                    materialId: 4,
+                    castsShadow: true,
+                    receivesShadow: true
+                ))
+            }
+
+            zCursor += max(depthL, depthR) * 0.5 + gap + min(depthL, depthR) * 0.5
+            bi += 1
+        }
+
+        // Graybox palms along the sidewalks (art-ref silhouettes).
+        let palmBase = -fmod(state.runDistance, 28)
+        for i in 0..<8 {
+            let z = palmBase + Float(i) * 28 - 6
+            let side: Float = (i % 2 == 0) ? -1 : 1
+            let trunk = Math.translation(SIMD3(side * 9.4, 3.2, z)) * Math.scale(SIMD3(0.45, 6.4, 0.45))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: trunk,
+                color: SIMD4(0.35, 0.18, 0.1, 1),
+                isWave: false,
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
+            ))
+            let fronds = Math.translation(SIMD3(side * 9.4, 6.6, z)) * Math.scale(SIMD3(3.2, 0.9, 3.2))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: fronds,
+                color: SIMD4(0.12, 0.55, 0.22, 1),
+                isWave: false,
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
+            ))
+        }
+
+        // Stylized city billboards (art-ref vibe — solid color panels).
+        let signScroll = -fmod(state.runDistance, 55)
+        for i in 0..<4 {
+            let z = signScroll + Float(i) * 55 + 18
+            let side: Float = (i % 2 == 0) ? -1 : 1
+            let pole = Math.translation(SIMD3(side * 10.2, 4.0, z)) * Math.scale(SIMD3(0.25, 8.0, 0.25))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: pole,
+                color: SIMD4(0.2, 0.2, 0.22, 1),
+                isWave: false,
+                materialId: 4,
+                castsShadow: true,
+                receivesShadow: true
+            ))
+            let panelColor: SIMD4<Float> = (i % 2 == 0)
+                ? SIMD4(ArtDirection.neonGreen.x, ArtDirection.neonGreen.y, ArtDirection.neonGreen.z, 1)
+                : SIMD4(1.0, 0.55, 0.12, 1)
+            let panel = Math.translation(SIMD3(side * 10.2, 8.2, z)) * Math.scale(SIMD3(0.2, 3.2, 5.5))
+            items.append(DrawItem(
+                mesh: unitBox,
+                modelMatrix: panel,
+                color: panelColor,
+                isWave: false,
+                materialId: 3,
+                castsShadow: true,
+                receivesShadow: false
+            ))
         }
 
         return items
@@ -602,10 +794,22 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelMatrix: base * yaw * Math.translation(SIMD3(0, 1.35, 0.1)) * Math.scale(SIMD3(1.1, 0.25, 0.7)),
                 color: roofColor,
                 isWave: false,
-                materialId: 4,
+                materialId: kind == .police ? 3 : 4,
                 castsShadow: true,
                 receivesShadow: true
             ))
+            if kind == .police {
+                // Blue flasher
+                items.append(DrawItem(
+                    mesh: unitBox,
+                    modelMatrix: base * yaw * Math.translation(SIMD3(0.35, 1.4, 0.1)) * Math.scale(SIMD3(0.35, 0.18, 0.45)),
+                    color: SIMD4(0.15, 0.45, 1.0, 1),
+                    isWave: false,
+                    materialId: 3,
+                    castsShadow: false,
+                    receivesShadow: false
+                ))
+            }
         case .barrier:
             items.append(DrawItem(
                 mesh: unitBox,
@@ -646,24 +850,24 @@ final class Renderer: NSObject, MTKViewDelegate {
                 castsShadow: true,
                 receivesShadow: true
             ))
-            // lamps
+            // lamps — emissive neon (materialId 3 self-glow path)
             items.append(DrawItem(
                 mesh: unitBox,
                 modelMatrix: base * Math.translation(SIMD3(0, 2.1, 0.28)) * Math.scale(SIMD3(0.35, 0.28, 0.2)),
                 color: SIMD4(0.95, 0.15, 0.1, 1),
                 isWave: false,
-                materialId: 4,
-                castsShadow: true,
-                receivesShadow: true
+                materialId: 3,
+                castsShadow: false,
+                receivesShadow: false
             ))
             items.append(DrawItem(
                 mesh: unitBox,
                 modelMatrix: base * Math.translation(SIMD3(0, 1.7, 0.28)) * Math.scale(SIMD3(0.35, 0.28, 0.2)),
-                color: SIMD4(0.2, 0.9, 0.25, 1),
+                color: SIMD4(0.2, 0.95, 0.25, 1),
                 isWave: false,
-                materialId: 4,
-                castsShadow: true,
-                receivesShadow: true
+                materialId: 3,
+                castsShadow: false,
+                receivesShadow: false
             ))
         }
     }
@@ -735,7 +939,32 @@ final class Renderer: NSObject, MTKViewDelegate {
             fpsAccum = 0
             fpsFrames = 0
         }
-        camera.update(follow: state.surfer.position, lean: state.surfer.lean, shake: state.wipeoutShake, deltaTime: dt)
+
+        waveShapeLogAccum += dt
+        if waveShapeLogAccum >= 1.0 {
+            waveShapeLogAccum = 0
+            let y0 = state.wave.height(x: state.surfer.x, z: 0, time: state.time, scrollZ: state.scrollZ)
+            let y30 = state.wave.height(x: state.surfer.x, z: 30, time: state.time, scrollZ: state.scrollZ)
+            let camY = camera.smoothEye.y
+            print(String(format:
+                "[FloodSurfer Wave] y(z=0)=%.2f y(z=+30)=%.2f Δh=%.2f camY=%.2f amp=%.1f face=%.1f crestShift=%.1f",
+                y0, y30, y0 - y30, camY,
+                state.wave.amplitude, state.wave.faceWidth, state.wave.crestShift
+            ))
+        }
+
+        // After wipeout → restart, snap camera above water immediately.
+        if lastWasGameOver && !state.isGameOver {
+            camera.invalidate()
+        }
+        lastWasGameOver = state.isGameOver
+
+        camera.update(
+            follow: state.surfer.position,
+            lean: state.surfer.lean,
+            shake: state.wipeoutShake,
+            deltaTime: dt
+        )
 
         let previousValueToWaitFor = frameIndex - maxBuffersInFlight
         endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10)
@@ -745,7 +974,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandAllocator.reset()
         commandBuffer.beginCommandBuffer(allocator: commandAllocator)
 
-        shadowMap.updateLightMatrix(sunDirection: ibl.config.sunDirection, focus: state.surfer.position + SIMD3(0, 4, 12))
+        shadowMap.updateLightMatrix(
+            sunDirection: ArtDirection.sunDirection,
+            focus: state.surfer.position + SIMD3(0, 6, 18)
+        )
 
         let viewM = camera.viewMatrix(follow: state.surfer.position)
         let projM = camera.projectionMatrix(aspect: aspect)

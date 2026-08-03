@@ -485,7 +485,7 @@ def main():
     cache.mkdir(parents=True, exist_ok=True)
     runtime.mkdir(parents=True, exist_ok=True)
     ibl_cfg = manifest["ibl"]
-    runtime_res = int(manifest.get("runtime_resolution", 2048))
+    runtime_res = int(manifest.get("runtime_resolution", 1024))
     credits: list[dict] = []
 
     hdr_path = None
@@ -521,9 +521,14 @@ def main():
     hdr = load_radiance_hdr(hdr_path)
     print(f"HDR size {hdr.shape[1]}x{hdr.shape[0]} max={hdr.max():.2f}")
 
-    # Sky equirect — keep linear HDR (no tonemap)
-    sky_hdr = _resize_float(hdr, 2048, 1024)
+    sky_w = int(ibl_cfg.get("sky_width", 1024))
+    sky_h = int(ibl_cfg.get("sky_height", 512))
+    sky_hdr = _resize_float(hdr, sky_w, sky_h)
+    # Linear HDR only — never tonemap / sRGB-encode sky into the KTX.
+    assert sky_hdr.dtype == np.float32
+    sky_peak = float(sky_hdr.max())
     save_ktx_rgba16f(runtime / "sky_equirect.ktx", sky_hdr)
+    print(f"Sky HDR peak (linear)={sky_peak:.3f} — must stay >> 1 for sunset sun disk")
 
     sun_dir, sun_col = find_sun_direction(hdr)
     print(f"Sun direction {sun_dir}, color {sun_col}")
@@ -533,11 +538,12 @@ def main():
     irr_peak = float(irr.max() + 1e-5)
 
     spec_mips = int(ibl_cfg["specular_mips"])
+    # Same resolution for every specular layer (Metal 2D-array requires equal sizes).
+    spec_size = int(ibl_cfg["specular_size"])
     for mi in range(spec_mips):
         roughness = mi / max(spec_mips - 1, 1)
-        size = max(32, int(ibl_cfg["specular_size"] * (0.5 ** mi)))
-        print(f"Specular mip {mi} roughness={roughness:.2f} size={size}")
-        spec = bake_specular_equirect(hdr, size, roughness, samples=12 if mi > 0 else 16)
+        print(f"Specular mip {mi} roughness={roughness:.2f} size={spec_size}")
+        spec = bake_specular_equirect(hdr, spec_size, roughness, samples=12 if mi > 0 else 16)
         save_ktx_rgba16f(runtime / f"specular_m{mi}.ktx", spec)
 
     brdf = bake_brdf_lut(ibl_cfg["brdf_lut_size"])
@@ -561,7 +567,10 @@ def main():
         "sunColor": sun_col,
         "sunIntensity": 2.8,
         "iblIntensity": 1.15,
-        "irradiancePeak": irr_peak,
+        # HUD iblPeak must reflect sky HDR peak (not diffuse irradiance ~1–2).
+        "skyPeak": sky_peak,
+        "irradiancePeak": sky_peak,
+        "irradianceMapPeak": irr_peak,
         "specularMips": spec_mips,
         "shadowBias": 0.002,
         "hdri": "sunset_jhbcentral",

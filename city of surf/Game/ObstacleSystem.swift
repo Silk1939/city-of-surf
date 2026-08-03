@@ -90,22 +90,34 @@ struct ObstacleSystem {
     func worldPosition(for obstacle: Obstacle, runDistance: Float, wave: WaveField, time: Float, scrollZ: Float) -> SIMD3<Float> {
         let worldZ = obstacle.localZ - runDistance
         let x = obstacle.x
-        let waterY = wave.height(x: x, z: worldZ, time: time, scrollZ: scrollZ)
+        // Full displacement so props ride the flood curl with the mesh.
+        let sample = wave.displacement(x: x, z: worldZ, time: time, scrollZ: scrollZ)
         let bob = sin(time * 2.6 + obstacle.localZ) * 0.12
         let yOff: Float = obstacle.kind == .trafficLight ? obstacle.size.y * 0.35 : obstacle.size.y * 0.5
-        return SIMD3(x, waterY + yOff + bob + 0.25, worldZ)
+        return SIMD3(x + sample.x, sample.y + yOff + bob + 0.25, worldZ + sample.z)
     }
 
     /// Half-extents in world XZ after the render yaw (cars are rotated 90°).
     private func worldHalfExtents(_ o: Obstacle) -> (Float, Float, Float) {
         switch o.kind {
         case .taxi, .police:
-            // Visual: yaw 90° turns model (w,h,l)=(2,1.15,4) into ~4 wide (X) by ~2 deep (Z).
-            return (o.size.z * 0.45, o.size.y * 0.48, o.size.x * 0.45)
+            // Match visual cabin roof (~body 1.15 + cabin 0.9 → ~1.3 half from center).
+            return (o.size.z * 0.45, 1.15, o.size.x * 0.45)
         case .barrier:
             return (o.size.x * 0.5, o.size.y * 0.5, o.size.z * 0.5)
         case .trafficLight:
-            return (0.4, o.size.y * 0.45, 0.4)
+            // Collide only with the signal head (not the pole) — duck is real geometry.
+            return (0.45, 0.7, 0.4)
+        }
+    }
+
+    private func collisionCenter(for o: Obstacle, base: SIMD3<Float>) -> SIMD3<Float> {
+        switch o.kind {
+        case .trafficLight:
+            // Head sits ~1.7 above pole origin used for rendering.
+            return SIMD3(base.x, base.y + 1.7, base.z)
+        default:
+            return base
         }
     }
 
@@ -114,22 +126,23 @@ struct ObstacleSystem {
         let sMaxY = surfer.collisionCenter.y + surfer.collisionHalfHeight
 
         for o in obstacles where o.active {
-            let pos = worldPosition(for: o, runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ)
+            let base = worldPosition(for: o, runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ)
+            let pos = collisionCenter(for: o, base: base)
             let (hx, hy, hz) = worldHalfExtents(o)
             let oMinY = pos.y - hy
             let oMaxY = pos.y + hy
 
             // Jump clear: surfer entirely above obstacle.
-            if sMinY > oMaxY + 0.05 {
+            if sMinY > oMaxY + 0.08 {
                 continue
             }
-            // Duck under traffic lights.
-            if o.kind == .trafficLight, surfer.pose == .ducking, sMaxY < oMinY + 1.2 {
+            // Duck under traffic-light head — true clearance, not an immunity flag.
+            if o.kind == .trafficLight, surfer.pose == .ducking, sMaxY < oMinY + 0.12 {
                 continue
             }
 
-            let dx = abs(pos.x - surfer.x)
-            let dz = abs(pos.z) // surfer near z=0
+            let dx = abs(pos.x - surfer.collisionCenter.x)
+            let dz = abs(pos.z - surfer.collisionCenter.z)
             let yOverlap = sMinY < oMaxY && sMaxY > oMinY
             if dx < hx + surfer.collisionRadius && dz < hz + surfer.collisionRadius && yOverlap {
                 return true
