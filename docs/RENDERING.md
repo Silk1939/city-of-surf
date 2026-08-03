@@ -56,16 +56,19 @@ make fetch-assets   # tools/fetch_assets.py + tools/assets.json
 ## Frame graph
 
 1. **Shadow pass** — buildings, surfer, obstacles → 2048² `.depth32Float` texture
-2. **Sky** — procedural sunset gradient (+ sun glow); HDRI reserved for IBL
-3. **Color pass** — solids with soft shadow floor; flood wave with stylized water (no SM receive)
-4. **Grade** — saturation / warm fog / vignette in HDR, then ACES
+2. **HDR scene** — sky + solids + wave → offscreen `.rgba16Float` (linear HDR; warm fog only, no tonemap)
+3. **Bloom** — soft-knee extract (half-res) → 3-mip separable Gaussian → additive upsample
+4. **Composite** — bloom add → ACES → saturation punch → vignette → film grain → drawable (`.bgra8Unorm_srgb`)
+
+Tunables: `ArtDirection.bloomThreshold` / `bloomIntensity` / `grainAmount` / `saturation` / `vignetteStrength`.
 
 ### Metal 4 depth note
 
 `MTL4RenderPipelineDescriptor` does **not** expose `depthAttachmentPixelFormat` / `stencilAttachmentPixelFormat`.
 Depth/stencil formats come from the render-pass attachments:
-- Main `MTKView` pass: `.depth32Float_stencil8`
+- HDR scene pass: private `.depth32Float_stencil8` (`HDRPipeline`)
 - Shadow pass: `.depth32Float` via `ShadowMap`
+- Composite: drawable color only (no depth writes)
 
 ## IBL format
 

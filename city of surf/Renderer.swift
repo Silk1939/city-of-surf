@@ -53,11 +53,20 @@ final class Renderer: NSObject, MTKViewDelegate {
     var wavePipeline: MTLRenderPipelineState
     var shadowPipeline: MTLRenderPipelineState
     var skyPipeline: MTLRenderPipelineState
+    var bloomExtractPipeline: MTLRenderPipelineState
+    var bloomBlurPipeline: MTLRenderPipelineState
+    var bloomDownsamplePipeline: MTLRenderPipelineState
+    var bloomUpsamplePipeline: MTLRenderPipelineState
+    var postCopyPipeline: MTLRenderPipelineState
+    var compositePipeline: MTLRenderPipelineState
     var depthState: MTLDepthStencilState
     var skyDepthState: MTLDepthStencilState
+    var postDepthState: MTLDepthStencilState
 
     var uniformBufferIndex = 0
     var objectDrawCount = 0
+    var postFXUniformBuffer: MTLBuffer
+    var hdrPipeline: HDRPipeline!
 
     var camera = ChaseCamera()
     var aspect: Float = 1
@@ -116,7 +125,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.commandAllocators = allocators
 
         let argTableDesc = MTL4ArgumentTableDescriptor()
-        argTableDesc.maxBufferBindCount = 4
+        argTableDesc.maxBufferBindCount = 5
         guard let vat = try? device.makeArgumentTable(descriptor: argTableDesc) else {
             fail("vertexArgumentTable fehlgeschlagen")
             return nil
@@ -139,20 +148,25 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let frameSize = alignedSize(MemoryLayout<FrameUniforms>.size) * maxBuffersInFlight
         let objectSize = alignedSize(MemoryLayout<ObjectUniforms>.size) * maxObjectsPerFrame * maxBuffersInFlight
+        let postFXSize = alignedSize(MemoryLayout<PostFXUniforms>.size) * maxBuffersInFlight
         guard let fb = device.makeBuffer(length: frameSize, options: .storageModeShared),
-              let ob = device.makeBuffer(length: objectSize, options: .storageModeShared) else {
-            fail("Uniform-Buffer Alloc fehlgeschlagen (frame=\(frameSize) object=\(objectSize))")
+              let ob = device.makeBuffer(length: objectSize, options: .storageModeShared),
+              let pb = device.makeBuffer(length: postFXSize, options: .storageModeShared) else {
+            fail("Uniform-Buffer Alloc fehlgeschlagen (frame=\(frameSize) object=\(objectSize) postFX=\(postFXSize))")
             return nil
         }
         frameUniformBuffer = fb
         frameUniformBuffer.label = "FrameUniforms"
         objectUniformBuffer = ob
         objectUniformBuffer.label = "ObjectUniforms"
+        postFXUniformBuffer = pb
+        postFXUniformBuffer.label = "PostFXUniforms"
 
         // Struct layout smoke (CPU/GPU must match ShaderTypes.h).
         let fu = MemoryLayout<FrameUniforms>.size
         let ou = MemoryLayout<ObjectUniforms>.size
-        print("Renderer: FrameUniforms size=\(fu) ObjectUniforms size=\(ou) BufferIndex.frame=\(BufferIndex.frameUniforms.rawValue) object=\(BufferIndex.objectUniforms.rawValue)")
+        let pu = MemoryLayout<PostFXUniforms>.size
+        print("Renderer: FrameUniforms size=\(fu) ObjectUniforms size=\(ou) PostFXUniforms size=\(pu) BufferIndex.postFX=\(BufferIndex.postFXUniforms.rawValue)")
 
         metalKitView.depthStencilPixelFormat = .depth32Float_stencil8
         metalKitView.colorPixelFormat = .bgra8Unorm_srgb
@@ -172,28 +186,88 @@ final class Renderer: NSObject, MTKViewDelegate {
             return nil
         }
         self.shadowMap = sm
+        self.hdrPipeline = HDRPipeline(device: device)
 
         let vd = Self.buildMetalVertexDescriptor()
+        let hdrFormat: MTLPixelFormat = .rgba16Float
+        let ldrFormat = metalKitView.colorPixelFormat
 
         do {
             solidPipeline = try Self.buildPipeline(
                 device: device,
-                metalKitView: metalKitView,
+                colorFormat: hdrFormat,
+                sampleCount: metalKitView.sampleCount,
                 vertexDescriptor: vd,
                 vertex: "solidVertex",
                 fragment: "solidFragment",
-                label: "Solid"
+                label: "SolidHDR"
             )
             wavePipeline = try Self.buildPipeline(
                 device: device,
-                metalKitView: metalKitView,
+                colorFormat: hdrFormat,
+                sampleCount: metalKitView.sampleCount,
                 vertexDescriptor: vd,
                 vertex: "waveVertex",
                 fragment: "waveFragment",
-                label: "Wave"
+                label: "WaveHDR"
             )
             shadowPipeline = try Self.buildShadowPipeline(device: device, vertexDescriptor: vd)
-            skyPipeline = try Self.buildSkyPipeline(device: device, metalKitView: metalKitView)
+            skyPipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: hdrFormat,
+                sampleCount: metalKitView.sampleCount,
+                vertex: "skyVertex",
+                fragment: "skyFragment",
+                label: "SkyHDR"
+            )
+            bloomExtractPipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: hdrFormat,
+                sampleCount: 1,
+                vertex: "postVertex",
+                fragment: "bloomExtractFragment",
+                label: "BloomExtract"
+            )
+            bloomBlurPipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: hdrFormat,
+                sampleCount: 1,
+                vertex: "postVertex",
+                fragment: "bloomBlurFragment",
+                label: "BloomBlur"
+            )
+            bloomDownsamplePipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: hdrFormat,
+                sampleCount: 1,
+                vertex: "postVertex",
+                fragment: "bloomDownsampleFragment",
+                label: "BloomDownsample"
+            )
+            bloomUpsamplePipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: hdrFormat,
+                sampleCount: 1,
+                vertex: "postVertex",
+                fragment: "bloomUpsampleFragment",
+                label: "BloomUpsample"
+            )
+            postCopyPipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: hdrFormat,
+                sampleCount: 1,
+                vertex: "postVertex",
+                fragment: "postCopyFragment",
+                label: "PostCopy"
+            )
+            compositePipeline = try Self.buildFullscreenPipeline(
+                device: device,
+                colorFormat: ldrFormat,
+                sampleCount: metalKitView.sampleCount,
+                vertex: "postVertex",
+                fragment: "compositeFragment",
+                label: "Composite"
+            )
         } catch {
             fail("Pipeline: \(error.localizedDescription)")
             return nil
@@ -216,6 +290,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             return nil
         }
         skyDepthState = sds
+
+        let postDepthDesc = MTLDepthStencilDescriptor()
+        postDepthDesc.depthCompareFunction = .always
+        postDepthDesc.isDepthWriteEnabled = false
+        guard let pds = device.makeDepthStencilState(descriptor: postDepthDesc) else {
+            fail("DepthStencilState (post) fehlgeschlagen")
+            return nil
+        }
+        postDepthState = pds
 
         do {
             unitBox = try MeshFactory.makeBox(
@@ -256,7 +339,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             fail("makeResidencySet fehlgeschlagen")
             return nil
         }
-        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, shadowMap.texture])
+        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, postFXUniformBuffer, shadowMap.texture])
+        rs.addAllocations(hdrPipeline.allTextures)
         for mesh in [unitBox, waveMesh, surferMesh, coinMesh] {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
             rs.addAllocations(mesh.submeshes.map(\.indexBuffer.buffer))
@@ -279,17 +363,28 @@ final class Renderer: NSObject, MTKViewDelegate {
         gameState.debugKTXLoaded = true
         gameState.debugIBLPeak = ibl.config.irradiancePeak
         gameState.debugShadowActive = true
+        updateTextureMemoryEstimate(gameState: gameState)
+        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) HDR=\(hdrPipeline.width)x\(hdrPipeline.height) bloom=\(ArtDirection.bloomIntensity) FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
+#endif
+    }
+
+    private func updateTextureMemoryEstimate(gameState: GameState) {
         let shadowBytes = shadowMap.size * shadowMap.size * 4
-        let totalBytes = ibl.approximateTextureBytes + shadowBytes
+        let totalBytes = ibl.approximateTextureBytes + shadowBytes + hdrPipeline.approximateTextureBytes
         let mb = Float(totalBytes) / (1024 * 1024)
         gameState.debugTextureMemoryMB = mb
-        // Soft budget for mid-range iPhones (KTX HDR + 2K PBR + shadow).
         let warnMB: Float = 128
         gameState.debugTextureMemoryWarn = mb > warnMB
         if gameState.debugTextureMemoryWarn {
             print("[FloodSurfer Smoke] WARN texture memory ≈ \(String(format: "%.1f", mb)) MB > \(Int(warnMB)) MB budget")
         }
-        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) texMem≈\(String(format: "%.1f", mb))MB FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
+    }
+
+    private func refreshHDRResidency() {
+#if !targetEnvironment(simulator)
+        // HDR targets recreated on resize — keep residency set in sync.
+        residencySet.addAllocations(hdrPipeline.allTextures)
+        residencySet.commit()
 #endif
     }
     class func buildMetalVertexDescriptor() -> MTLVertexDescriptor {
@@ -315,21 +410,17 @@ final class Renderer: NSObject, MTKViewDelegate {
 #if !targetEnvironment(simulator)
     /// Metal 4: `MTL4RenderPipelineDescriptor` has no depth/stencil pixel-format fields
     /// (unlike Metal 1–3). Depth comes from the render-pass attachment at encode time.
-    /// Color format is still declared here. Main pass: MTKView `.depth32Float_stencil8`.
-    /// Shadow pass: separate `.depth32Float` target via `ShadowMap.makeRenderPassDescriptor()`.
+    /// Scene color is offscreen `.rgba16Float`; drawable composite uses MTKView format.
     @MainActor
     class func buildPipeline(
         device: MTLDevice,
-        metalKitView: MTKView,
+        colorFormat: MTLPixelFormat,
+        sampleCount: Int,
         vertexDescriptor: MTLVertexDescriptor,
         vertex: String,
         fragment: String,
         label: String
     ) throws -> MTLRenderPipelineState {
-        precondition(
-            metalKitView.depthStencilPixelFormat == .depth32Float_stencil8,
-            "MTKView depth/stencil must be depth32Float_stencil8"
-        )
         let library = device.makeDefaultLibrary()
         let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
 
@@ -342,12 +433,39 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let pipelineDescriptor = MTL4RenderPipelineDescriptor()
         pipelineDescriptor.label = label
-        pipelineDescriptor.rasterSampleCount = metalKitView.sampleCount
+        pipelineDescriptor.rasterSampleCount = sampleCount
         pipelineDescriptor.vertexFunctionDescriptor = vDesc
         pipelineDescriptor.fragmentFunctionDescriptor = fDesc
         pipelineDescriptor.vertexDescriptor = vertexDescriptor
-        pipelineDescriptor.colorAttachments[0].pixelFormat = metalKitView.colorPixelFormat
+        pipelineDescriptor.colorAttachments[0].pixelFormat = colorFormat
 
+        return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
+    }
+
+    @MainActor
+    class func buildFullscreenPipeline(
+        device: MTLDevice,
+        colorFormat: MTLPixelFormat,
+        sampleCount: Int,
+        vertex: String,
+        fragment: String,
+        label: String
+    ) throws -> MTLRenderPipelineState {
+        let library = device.makeDefaultLibrary()
+        let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
+        let vDesc = MTL4LibraryFunctionDescriptor()
+        vDesc.library = library
+        vDesc.name = vertex
+        let fDesc = MTL4LibraryFunctionDescriptor()
+        fDesc.library = library
+        fDesc.name = fragment
+
+        let pipelineDescriptor = MTL4RenderPipelineDescriptor()
+        pipelineDescriptor.label = label
+        pipelineDescriptor.rasterSampleCount = sampleCount
+        pipelineDescriptor.vertexFunctionDescriptor = vDesc
+        pipelineDescriptor.fragmentFunctionDescriptor = fDesc
+        pipelineDescriptor.colorAttachments[0].pixelFormat = colorFormat
         return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
 
@@ -368,30 +486,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         pipelineDescriptor.fragmentFunctionDescriptor = fDesc
         pipelineDescriptor.vertexDescriptor = vertexDescriptor
         // Depth-only pass: format is the ShadowMap texture (.depth32Float) on the pass descriptor.
-        return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
-    }
-
-    @MainActor
-    class func buildSkyPipeline(device: MTLDevice, metalKitView: MTKView) throws -> MTLRenderPipelineState {
-        precondition(
-            metalKitView.depthStencilPixelFormat == .depth32Float_stencil8,
-            "MTKView depth/stencil must be depth32Float_stencil8"
-        )
-        let library = device.makeDefaultLibrary()
-        let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
-        let vDesc = MTL4LibraryFunctionDescriptor()
-        vDesc.library = library
-        vDesc.name = "skyVertex"
-        let fDesc = MTL4LibraryFunctionDescriptor()
-        fDesc.library = library
-        fDesc.name = "skyFragment"
-
-        let pipelineDescriptor = MTL4RenderPipelineDescriptor()
-        pipelineDescriptor.label = "Sky"
-        pipelineDescriptor.rasterSampleCount = metalKitView.sampleCount
-        pipelineDescriptor.vertexFunctionDescriptor = vDesc
-        pipelineDescriptor.fragmentFunctionDescriptor = fDesc
-        pipelineDescriptor.colorAttachments[0].pixelFormat = metalKitView.colorPixelFormat
         return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
 #endif
@@ -420,6 +514,41 @@ final class Renderer: NSObject, MTKViewDelegate {
         let stride = alignedSize(MemoryLayout<FrameUniforms>.size)
         let offset = stride * uniformBufferIndex
         return frameUniformBuffer.gpuAddress + UInt64(offset)
+    }
+
+    private func postFXUniformsPointer() -> UnsafeMutablePointer<PostFXUniforms> {
+        let stride = alignedSize(MemoryLayout<PostFXUniforms>.size)
+        let offset = stride * uniformBufferIndex
+        return postFXUniformBuffer.contents().advanced(by: offset).bindMemory(to: PostFXUniforms.self, capacity: 1)
+    }
+
+    private func postFXUniformsGPUAddress() -> UInt64 {
+        let stride = alignedSize(MemoryLayout<PostFXUniforms>.size)
+        let offset = stride * uniformBufferIndex
+        return postFXUniformBuffer.gpuAddress + UInt64(offset)
+    }
+
+    private func writePostFX(
+        time: Float,
+        blurDirection: SIMD2<Float>,
+        texelSize: SIMD2<Float>
+    ) {
+        var u = PostFXUniforms()
+        HDRPipeline.fillPostFX(&u, time: time, blurDirection: blurDirection, texelSize: texelSize)
+        postFXUniformsPointer().pointee = u
+        fragmentArgumentTable.setAddress(postFXUniformsGPUAddress(), index: BufferIndex.postFXUniforms.rawValue)
+    }
+
+    private func encodeFullscreen(
+        _ encoder: MTL4RenderCommandEncoder,
+        pipeline: MTLRenderPipelineState,
+        label: String
+    ) {
+        encoder.label = label
+        encoder.setDepthStencilState(postDepthState)
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+        encoder.drawPrimitives(primitiveType: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
     private func buildDrawList(state: GameState) -> [DrawItem] {
@@ -1027,18 +1156,18 @@ final class Renderer: NSObject, MTKViewDelegate {
             shadowEncoder.endEncoding()
         }
 
-        // --- Main color pass ---
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            fatalError("Failed to create render command encoder")
+        // --- HDR scene pass (sky + solids + wave) ---
+        let scenePass = hdrPipeline.makeScenePassDescriptor()
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: scenePass) else {
+            fatalError("Failed to create HDR scene encoder")
         }
-        renderEncoder.label = "FloodSurfer"
+        renderEncoder.label = "HDRScene"
         renderEncoder.setCullMode(.back)
         renderEncoder.setFrontFacing(.counterClockwise)
         renderEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
         renderEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
         bindSharedLightingTextures()
 
-        // Sky first
         renderEncoder.setDepthStencilState(skyDepthState)
         renderEncoder.setRenderPipelineState(skyPipeline)
         renderEncoder.drawPrimitives(primitiveType: .triangle, vertexStart: 0, vertexCount: 3)
@@ -1053,8 +1182,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             bindMaterialTextures(for: item)
             encodeMesh(item, encoder: renderEncoder)
         }
-
         renderEncoder.endEncoding()
+
+        // --- Bloom: extract → blur → 2× downsample/blur → additive upsample ---
+        encodeBloomChain(time: state.time)
+
+        // --- Composite into drawable (ACES + grade + grain) ---
+        guard let compositeEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            fatalError("Failed to create composite encoder")
+        }
+        writePostFX(time: state.time, blurDirection: .zero, texelSize: .zero)
+        fragmentArgumentTable.setTexture(hdrPipeline.sceneColor.gpuResourceID, index: TextureIndex.albedo.rawValue)
+        fragmentArgumentTable.setTexture(hdrPipeline.bloomMips[0].gpuResourceID, index: TextureIndex.normal.rawValue)
+        encodeFullscreen(compositeEncoder, pipeline: compositePipeline, label: "Composite")
+        compositeEncoder.endEncoding()
+
         commandBuffer.useResidencySet((view.layer as! CAMetalLayer).residencySet)
         commandBuffer.endCommandBuffer()
 
@@ -1071,8 +1213,93 @@ final class Renderer: NSObject, MTKViewDelegate {
 #endif
     }
 
+    private func encodeBloomChain(time: Float) {
+#if !targetEnvironment(simulator)
+        let mips = hdrPipeline.bloomMips
+        let temps = hdrPipeline.blurTemps
+        guard mips.count == 3, temps.count == 3 else { return }
+
+        // Bind slots: albedo=sceneHDR, normal=bloom (same indices as TextureIndexSceneHDR/Bloom).
+        let sceneSlot = TextureIndex.albedo.rawValue
+        let bloomSlot = TextureIndex.normal.rawValue
+
+        // 1) Threshold extract into mip0 (half res)
+        if let enc = commandBuffer.makeRenderCommandEncoder(
+            descriptor: hdrPipeline.makeColorPassDescriptor(target: mips[0], loadAction: .clear)
+        ) {
+            writePostFX(time: time, blurDirection: .zero, texelSize: .zero)
+            fragmentArgumentTable.setTexture(hdrPipeline.sceneColor.gpuResourceID, index: sceneSlot)
+            encodeFullscreen(enc, pipeline: bloomExtractPipeline, label: "BloomExtract")
+            enc.endEncoding()
+        }
+
+        // 2) Separable blur each mip; downsample into next
+        for i in 0..<mips.count {
+            let texel = SIMD2<Float>(1.0 / Float(mips[i].width), 1.0 / Float(mips[i].height))
+
+            if let enc = commandBuffer.makeRenderCommandEncoder(
+                descriptor: hdrPipeline.makeColorPassDescriptor(target: temps[i], loadAction: .clear)
+            ) {
+                writePostFX(time: time, blurDirection: SIMD2(1, 0), texelSize: texel)
+                fragmentArgumentTable.setTexture(mips[i].gpuResourceID, index: bloomSlot)
+                encodeFullscreen(enc, pipeline: bloomBlurPipeline, label: "BloomBlurH\(i)")
+                enc.endEncoding()
+            }
+            if let enc = commandBuffer.makeRenderCommandEncoder(
+                descriptor: hdrPipeline.makeColorPassDescriptor(target: mips[i], loadAction: .clear)
+            ) {
+                writePostFX(time: time, blurDirection: SIMD2(0, 1), texelSize: texel)
+                fragmentArgumentTable.setTexture(temps[i].gpuResourceID, index: bloomSlot)
+                encodeFullscreen(enc, pipeline: bloomBlurPipeline, label: "BloomBlurV\(i)")
+                enc.endEncoding()
+            }
+
+            if i + 1 < mips.count {
+                if let enc = commandBuffer.makeRenderCommandEncoder(
+                    descriptor: hdrPipeline.makeColorPassDescriptor(target: mips[i + 1], loadAction: .clear)
+                ) {
+                    fragmentArgumentTable.setTexture(mips[i].gpuResourceID, index: bloomSlot)
+                    encodeFullscreen(enc, pipeline: bloomDownsamplePipeline, label: "BloomDown\(i)")
+                    enc.endEncoding()
+                }
+            }
+        }
+
+        // 3) Additive upsample mip2 → mip1 → mip0
+        for i in stride(from: mips.count - 1, through: 1, by: -1) {
+            if let enc = commandBuffer.makeRenderCommandEncoder(
+                descriptor: hdrPipeline.makeColorPassDescriptor(target: temps[i - 1], loadAction: .clear)
+            ) {
+                fragmentArgumentTable.setTexture(mips[i].gpuResourceID, index: bloomSlot)
+                fragmentArgumentTable.setTexture(mips[i - 1].gpuResourceID, index: sceneSlot)
+                encodeFullscreen(enc, pipeline: bloomUpsamplePipeline, label: "BloomUp\(i)")
+                enc.endEncoding()
+            }
+            if let enc = commandBuffer.makeRenderCommandEncoder(
+                descriptor: hdrPipeline.makeColorPassDescriptor(target: mips[i - 1], loadAction: .clear)
+            ) {
+                fragmentArgumentTable.setTexture(temps[i - 1].gpuResourceID, index: bloomSlot)
+                encodeFullscreen(enc, pipeline: postCopyPipeline, label: "BloomUpStore\(i)")
+                enc.endEncoding()
+            }
+        }
+#endif
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         aspect = Float(size.width / max(size.height, 1))
+#if !targetEnvironment(simulator)
+        let w = Int(size.width.rounded())
+        let h = Int(size.height.rounded())
+        guard w > 0, h > 0 else { return }
+        if hdrPipeline.recreate(width: w, height: h) {
+            refreshHDRResidency()
+            if let state = gameState {
+                updateTextureMemoryEstimate(gameState: state)
+            }
+            print("Renderer: HDR targets \(w)x\(h) bloom0=\(hdrPipeline.bloomMips[0].width)x\(hdrPipeline.bloomMips[0].height)")
+        }
+#endif
     }
 }
 

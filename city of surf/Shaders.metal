@@ -209,17 +209,19 @@ static float3 tonemapACES(float3 x)
     return saturate((x * (a * x + b)) / (x * (c * x + d) + e));
 }
 
-/// CITY SURFER grade — warm fog, saturation punch, vignette — then ACES.
-static float3 artGradeAndTonemap(float3 hdr, float2 ndc, float fogAmount)
+/// Warm distance fog in linear HDR (tonemap/grade happen in compositeFragment).
+static float3 applyWarmFog(float3 hdr, float fogAmount)
 {
     float3 fogWarm = float3(1.0, 0.55, 0.22) * 1.25;
-    hdr = mix(hdr, fogWarm, saturate(fogAmount));
-    float luma = dot(hdr, float3(0.2126, 0.7152, 0.0722));
-    hdr = mix(float3(luma), hdr, 1.22); // +22% saturation punch
-    float r2 = dot(ndc, ndc);
-    float vig = saturate(1.0 - r2 * 0.55);
-    hdr *= mix(0.72, 1.0, vig); // soft vignette
-    return tonemapACES(hdr);
+    return mix(hdr, fogWarm, saturate(fogAmount));
+}
+
+static float softKneeBloomWeight(float brightness, float threshold, float knee)
+{
+    float soft = brightness - threshold + knee;
+    soft = clamp(soft, 0.0, 2.0 * knee);
+    soft = (soft * soft) / max(4.0 * knee, 1e-4);
+    return max(soft, brightness - threshold) / max(brightness, 1e-4);
 }
 
 static float2 worldToNdc(float3 worldPos, constant FrameUniforms &frame)
@@ -335,8 +337,7 @@ fragment float4 skyFragment(SkyOut in [[stage_in]],
     col += sunCol * (disk * 6.0 + glow);
     col += float3(1.0, 0.95, 0.7) * disk * 8.0;
 
-    float2 ndcGrade = in.uv * 2.0 - 1.0;
-    return float4(artGradeAndTonemap(col, ndcGrade, 0.08), 1.0);
+    return float4(applyWarmFog(col, 0.08), 1.0);
 }
 
 vertex VOut solidVertex(Vertex in [[stage_in]],
@@ -428,7 +429,8 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         float window = step(0.16, wx) * step(wx, 0.84) * step(0.18, wz) * step(wz, 0.82) * facing;
         float lit = step(0.55, fract(sin(dot(floor(in.worldPos.xyz * float3(0.35, 0.55, 0.35)), float3(12.1, 78.2, 45.3))) * 43758.5));
         albedo = mix(albedo, albedo * 0.12, window * 0.9);
-        albedo += float3(1.0, 0.78, 0.35) * lit * window * 0.55;
+        // HDR emissive so bloom picks window glow.
+        albedo += float3(1.0, 0.78, 0.35) * lit * window * 1.6;
     }
 
     // Sidewalks / concrete slabs — no building window grid.
@@ -479,35 +481,33 @@ fragment float4 solidFragment(VOut in [[stage_in]],
                           frame.lightColor, frame.sunIntensity, shadow,
                           irradiance, prefiltered, brdf, frame.iblIntensity);
 
-    // Neon rim with fixed warm/neon punch (black suit alone would kill rim).
+    // Neon / boost emissives written > 1 so the bloom chain lights them up.
     if (object.materialId > 2.5 && object.materialId < 3.5) {
         float rim = pow(1.0 - saturate(dot(N, V)), 2.0);
         float3 rimCol = mix(float3(0.45, 0.98, 0.18), object.color.rgb, 0.45);
-        color += rimCol * rim * 1.15;
-        color += object.color.rgb * 0.18;
+        color += rimCol * rim * 2.4;
+        color += object.color.rgb * 0.45;
     }
     if (object.materialId > 4.5 && object.materialId < 5.5) {
         float pulse = 0.55 + 0.45 * sin(frame.time * 7.0 + in.worldPos.x * 2.0);
-        color += object.color.rgb * pulse * 1.1;
+        color += object.color.rgb * pulse * 2.8;
         float rim = pow(1.0 - saturate(dot(N, V)), 1.4);
-        color += float3(1.0, 0.92, 0.35) * rim * 1.35;
+        color += float3(1.0, 0.92, 0.35) * rim * 2.6;
         float glint = pow(saturate(dot(N, normalize(L + V))), 64.0);
-        color += float3(1.0, 0.95, 0.6) * glint * 2.2;
+        color += float3(1.0, 0.95, 0.6) * glint * 4.0;
     }
-    // Traffic-light / hazard emissive boost when color is saturated neon-ish
+    // Traffic-light / hazard / billboard neon
     if (object.materialId > 3.5 && object.materialId < 4.5) {
         float chroma = max(object.color.r, max(object.color.g, object.color.b))
                      - min(object.color.r, min(object.color.g, object.color.b));
         if (chroma > 0.35) {
             float pulse = 0.7 + 0.3 * sin(frame.time * 8.0);
-            color += object.color.rgb * pulse * 0.85;
+            color += object.color.rgb * pulse * 2.2;
         }
     }
 
-    // Fog in linear HDR (not LDR 0–1) so distant highlights aren't crushed before ACES.
     float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 120.0);
-    float2 ndc = worldToNdc(in.worldPos, frame);
-    return float4(artGradeAndTonemap(color, ndc, fog * 0.55), 1.0);
+    return float4(applyWarmFog(color, fog * 0.55), 1.0);
 }
 
 vertex VOut waveVertex(Vertex in [[stage_in]],
@@ -579,7 +579,8 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float glitterPath = street * pow(saturate(dot(N, L)), 3.0);
     glitterPath *= 0.45 + 0.55 * sin(in.worldPos.z * 1.7 + frame.time * 5.0);
     glitterPath += street * pow(sunDot, 10.0) * step(0.62, sparkle) * 1.4;
-    water += frame.lightColor * glitterPath * frame.sunIntensity * 0.5;
+    // Slightly hotter glitter so bloom catches the street path.
+    water += frame.lightColor * glitterPath * frame.sunIntensity * 0.85;
 
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
     irr = mix(irr, irr * float3(1.0, 0.55, 0.22) * 1.3, 0.5);
@@ -591,6 +592,106 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     water += spec * frame.lightColor * frame.sunIntensity * 0.4 * edgeShade;
 
     float fog = saturate((length(in.worldPos - frame.cameraPosition) - 35.0) / 130.0);
-    float2 ndc = worldToNdc(in.worldPos, frame);
-    return float4(artGradeAndTonemap(water, ndc, fog * 0.5), 1.0);
+    return float4(applyWarmFog(water, fog * 0.5), 1.0);
+}
+
+// MARK: - Post-FX (fullscreen triangle → bloom + composite)
+
+typedef struct
+{
+    float4 position [[position]];
+    float2 uv;
+} PostOut;
+
+vertex PostOut postVertex(uint vid [[vertex_id]])
+{
+    float2 positions[3] = { float2(-1, -1), float2(3, -1), float2(-1, 3) };
+    PostOut out;
+    out.position = float4(positions[vid], 0.0, 1.0);
+    out.uv = positions[vid] * 0.5 + 0.5;
+    return out;
+}
+
+fragment float4 bloomExtractFragment(PostOut in [[stage_in]],
+                                     constant PostFXUniforms &fx [[buffer(BufferIndexPostFXUniforms)]],
+                                     texture2d<float> scene [[texture(TextureIndexSceneHDR)]])
+{
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    float3 c = scene.sample(s, in.uv).rgb;
+    float brightness = max(c.r, max(c.g, c.b));
+    float w = softKneeBloomWeight(brightness, fx.bloomThreshold, fx.bloomSoftKnee);
+    return float4(c * w, 1.0);
+}
+
+fragment float4 bloomBlurFragment(PostOut in [[stage_in]],
+                                  constant PostFXUniforms &fx [[buffer(BufferIndexPostFXUniforms)]],
+                                  texture2d<float> src [[texture(TextureIndexBloom)]])
+{
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    // 9-tap separable Gaussian.
+    float weights[5] = { 0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216 };
+    float2 step = fx.blurDirection * fx.texelSize;
+    float3 c = src.sample(s, in.uv).rgb * weights[0];
+    for (int i = 1; i < 5; ++i) {
+        float2 d = step * float(i);
+        c += src.sample(s, in.uv + d).rgb * weights[i];
+        c += src.sample(s, in.uv - d).rgb * weights[i];
+    }
+    return float4(c, 1.0);
+}
+
+fragment float4 bloomDownsampleFragment(PostOut in [[stage_in]],
+                                        texture2d<float> src [[texture(TextureIndexBloom)]])
+{
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    // 4-tap box downsample.
+    float2 texel = 1.0 / float2(src.get_width(), src.get_height());
+    float3 c = src.sample(s, in.uv + float2(-0.5, -0.5) * texel).rgb;
+    c += src.sample(s, in.uv + float2( 0.5, -0.5) * texel).rgb;
+    c += src.sample(s, in.uv + float2(-0.5,  0.5) * texel).rgb;
+    c += src.sample(s, in.uv + float2( 0.5,  0.5) * texel).rgb;
+    return float4(c * 0.25, 1.0);
+}
+
+fragment float4 bloomUpsampleFragment(PostOut in [[stage_in]],
+                                      texture2d<float> low [[texture(TextureIndexBloom)]],
+                                      texture2d<float> high [[texture(TextureIndexSceneHDR)]])
+{
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    float3 a = high.sample(s, in.uv).rgb;
+    float3 b = low.sample(s, in.uv).rgb;
+    return float4(a + b, 1.0);
+}
+
+fragment float4 postCopyFragment(PostOut in [[stage_in]],
+                                 texture2d<float> src [[texture(TextureIndexBloom)]])
+{
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    return float4(src.sample(s, in.uv).rgb, 1.0);
+}
+
+fragment float4 compositeFragment(PostOut in [[stage_in]],
+                                  constant PostFXUniforms &fx [[buffer(BufferIndexPostFXUniforms)]],
+                                  texture2d<float> scene [[texture(TextureIndexSceneHDR)]],
+                                  texture2d<float> bloom [[texture(TextureIndexBloom)]])
+{
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    float3 hdr = scene.sample(s, in.uv).rgb;
+    hdr += bloom.sample(s, in.uv).rgb * fx.bloomIntensity;
+
+    // Fog already applied in scene shaders — grade + tonemap here.
+    float3 mapped = tonemapACES(hdr);
+    float luma = dot(mapped, float3(0.2126, 0.7152, 0.0722));
+    mapped = mix(float3(luma), mapped, fx.saturation);
+
+    float2 ndc = in.uv * 2.0 - 1.0;
+    float r2 = dot(ndc, ndc);
+    float vig = saturate(1.0 - r2 * 0.55);
+    mapped *= mix(1.0 - fx.vignetteStrength, 1.0, vig);
+
+    float grain = (hash21(in.uv * float2(scene.get_width(), scene.get_height()) + fx.time * 37.0) - 0.5)
+                * fx.grainAmount;
+    mapped += grain;
+
+    return float4(saturate(mapped), 1.0);
 }

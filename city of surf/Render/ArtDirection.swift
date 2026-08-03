@@ -35,8 +35,13 @@ enum ArtDirection {
     static let sunIntensity: Float = 2.6
     static let iblIntensity: Float = 0.85
     static let fogWarm = SIMD3<Float>(1.0, 0.55, 0.22)
-    static let saturationBoost: Float = 1.22
+    /// Post composite (ACES after bloom). Keep in sync with `compositeFragment`.
+    static let saturation: Float = 1.22
     static let vignetteStrength: Float = 0.28
+    static let bloomThreshold: Float = 1.2
+    static let bloomSoftKnee: Float = 0.5
+    static let bloomIntensity: Float = 0.35
+    static let grainAmount: Float = 0.015
     static let windowGlow = SIMD3<Float>(1.0, 0.78, 0.35)
 
     /// Cycle warm building tints (left/right facades).

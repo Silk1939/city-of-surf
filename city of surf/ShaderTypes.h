@@ -21,7 +21,8 @@ typedef NS_ENUM(EnumBackingType, BufferIndex)
     BufferIndexMeshPositions = 0,
     BufferIndexMeshGenerics  = 1,
     BufferIndexFrameUniforms = 2,
-    BufferIndexObjectUniforms = 3
+    BufferIndexObjectUniforms = 3,
+    BufferIndexPostFXUniforms = 4
 };
 
 typedef NS_ENUM(EnumBackingType, VertexAttribute)
@@ -40,6 +41,9 @@ typedef NS_ENUM(EnumBackingType, TextureIndex)
     TextureIndexSpecular    = 5,
     TextureIndexBrdfLUT     = 6,
     TextureIndexSky         = 7,
+    /// Aliases for post-FX binds (same slots as albedo/normal).
+    TextureIndexSceneHDR    = 0,
+    TextureIndexBloom       = 1,
 };
 
 typedef struct
@@ -68,6 +72,20 @@ typedef struct
     float _padB;
     float _padC;
 } FrameUniforms;
+
+typedef struct
+{
+    float bloomThreshold;
+    float bloomSoftKnee;
+    float bloomIntensity;
+    float grainAmount;
+    float saturation;
+    float vignetteStrength;
+    float time;
+    float _pad0;
+    simd_float2 blurDirection;
+    simd_float2 texelSize;
+} PostFXUniforms;
 
 typedef struct
 {
