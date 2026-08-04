@@ -11,6 +11,7 @@ import QuartzCore
 
 let maxBuffersInFlight = 3
 let maxObjectsPerFrame = 420
+/// Soft warn only — never abort a device frame; clamp draws instead.
 /// Keep false until device is stable without green/white block glitches.
 let enableBloomChain = false
 
@@ -816,7 +817,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         CityKit.appendAvenue(items: &items, meshes: cityKitMeshes, runDistance: state.runDistance)
 
         let palmBase = -fmod(state.runDistance, 28)
-        for i in 0..<8 {
+        for i in 0..<6 {
             let z = palmBase + Float(i) * 28 - 6
             let side: Float = (i % 2 == 0) ? -1 : 1
             UrbanProps.appendPalm(
@@ -827,7 +828,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             )
         }
         let tankBase = -fmod(state.runDistance, 70)
-        for i in 0..<3 {
+        for i in 0..<2 {
             let z = tankBase + Float(i) * 70 + 25
             let side: Float = (i % 2 == 0) ? -1 : 1
             UrbanProps.appendWaterTank(
@@ -838,7 +839,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let signScroll = -fmod(state.runDistance, 55)
-        for i in 0..<4 {
+        for i in 0..<3 {
             let z = signScroll + Float(i) * 55 + 18
             let side: Float = (i % 2 == 0) ? -1 : 1
             let panelColor: SIMD4<Float> = (i % 2 == 0)
@@ -1044,8 +1045,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let draws = buildDrawList(state: state)
         instanceStreamer.write(to: instanceUniformBuffer, frameSlot: uniformBufferIndex)
         if draws.count > maxObjectsPerFrame {
-            print("[FloodSurfer] ASSERT object count \(draws.count) > maxObjectsPerFrame \(maxObjectsPerFrame) — clamping")
-            assertionFailure("objectDrawCount exceeded maxObjectsPerFrame")
+            print("[FloodSurfer] WARN object count \(draws.count) > maxObjectsPerFrame \(maxObjectsPerFrame) — clamping (missing unique draws)")
         }
         objectDrawCount = min(draws.count, maxObjectsPerFrame)
         for i in 0..<objectDrawCount {

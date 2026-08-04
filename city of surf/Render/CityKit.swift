@@ -108,11 +108,11 @@ enum CityKit {
         let (xSide, zStart, zEnd, maxCount, scaleY, detail): (Float, Float, Float, Int, Float, Bool)
         switch layer {
         case .avenue:
-            (xSide, zStart, zEnd, maxCount, scaleY, detail) = (12.5, -20, 160, 14, 1.0, true)
+            (xSide, zStart, zEnd, maxCount, scaleY, detail) = (12.5, -20, 140, 10, 1.0, true)
         case .mid:
-            (xSide, zStart, zEnd, maxCount, scaleY, detail) = (22.0, -10, 180, 10, 1.35, true)
+            (xSide, zStart, zEnd, maxCount, scaleY, detail) = (22.0, 0, 160, 6, 1.25, false)
         case .far:
-            (xSide, zStart, zEnd, maxCount, scaleY, detail) = (36.0, 40, 220, 8, 1.8, false)
+            (xSide, zStart, zEnd, maxCount, scaleY, detail) = (36.0, 50, 200, 5, 1.6, false)
         }
 
         let seedBase: Int
@@ -208,18 +208,23 @@ enum CityKit {
         let baseCenter = SIMD3(center.x, baseH * 0.5, center.z)
         let bodyCenter = SIMD3(center.x, baseH + bodyH * 0.5, center.z)
 
-        // Sockel
-        add(
-            meshes.beveled,
-            Math.translation(baseCenter) * Math.scale(SIMD3(size.x * 1.05, baseH, size.z * 1.05)),
-            shadow,
-            material: 2
-        )
+        // Sockel only on detailed near buildings — saves draws on mid/far.
+        if detail {
+            add(
+                meshes.beveled,
+                Math.translation(baseCenter) * Math.scale(SIMD3(size.x * 1.05, baseH, size.z * 1.05)),
+                shadow,
+                material: 2
+            )
+        }
+
+        let massCenter = detail ? bodyCenter : center
+        let massSize = detail ? SIMD3(size.x, bodyH, size.z) : size
 
         // Primary mass — family silhouette
         switch family {
         case .brickWalkup:
-            add(meshes.beveled, Math.translation(bodyCenter) * Math.scale(SIMD3(size.x, bodyH, size.z)), body, material: 6)
+            add(meshes.beveled, Math.translation(massCenter) * Math.scale(massSize), body, material: 6)
             // Cornice
             add(
                 meshes.plate,
@@ -243,10 +248,11 @@ enum CityKit {
             }
 
         case .glassTower:
-            let slim = SIMD3(size.x * 0.72, bodyH * 1.15, size.z * 0.72)
+            let slim = SIMD3(size.x * 0.72, (detail ? bodyH : size.y) * 1.15, size.z * 0.72)
+            let slimY = detail ? baseH + slim.y * 0.5 : slim.y * 0.5
             add(
                 meshes.beveled,
-                Math.translation(SIMD3(center.x, baseH + slim.y * 0.5, center.z)) * Math.scale(slim),
+                Math.translation(SIMD3(center.x, slimY, center.z)) * Math.scale(slim),
                 SIMD4(ArtDirection.buildingShadow.x * 1.1, ArtDirection.buildingShadow.y * 1.15, ArtDirection.buildingShadow.z * 1.2, 1),
                 material: 6
             )
@@ -261,18 +267,18 @@ enum CityKit {
                     receive: false
                 )
             }
-            // Antenna
-            add(
-                meshes.cylinder,
-                Math.translation(SIMD3(center.x, baseH + slim.y + 1.2, center.z)) * Math.scale(SIMD3(0.2, 2.4, 0.2)),
-                shadow,
-                material: 4
-            )
+            if detail {
+                add(
+                    meshes.cylinder,
+                    Math.translation(SIMD3(center.x, baseH + slim.y + 1.2, center.z)) * Math.scale(SIMD3(0.2, 2.4, 0.2)),
+                    shadow,
+                    material: 4
+                )
+            }
 
         case .terracottaBlock:
             let t = SIMD4(ArtDirection.terracotta.x, ArtDirection.terracotta.y, ArtDirection.terracotta.z, 1)
-            add(meshes.rounded, Math.translation(bodyCenter) * Math.scale(SIMD3(size.x, bodyH, size.z)), t, material: 6)
-            // Deep arched band
+            add(meshes.rounded, Math.translation(massCenter) * Math.scale(massSize), t, material: 6)
             if detail {
                 add(
                     meshes.rounded,
@@ -281,47 +287,48 @@ enum CityKit {
                     shadow,
                     material: 4
                 )
-            }
-            add(
-                meshes.wedge,
-                Math.translation(SIMD3(center.x, size.y + 0.6, center.z)) * Math.scale(SIMD3(size.x * 0.95, 1.2, size.z * 0.95)),
-                t,
-                material: 4
-            )
-
-        case .neonHotel:
-            add(meshes.beveled, Math.translation(bodyCenter) * Math.scale(SIMD3(size.x, bodyH, size.z)), body, material: 6)
-            // Setback crown
-            add(
-                meshes.beveled,
-                Math.translation(SIMD3(center.x, size.y + 1.0, center.z)) * Math.scale(SIMD3(size.x * 0.7, 2.0, size.z * 0.7)),
-                shadow,
-                material: 6
-            )
-            if detail && hash(seed + 19) > 0.35 {
-                let neon = hash(seed + 21) > 0.5
-                    ? SIMD4(ArtDirection.neonMagenta.x, ArtDirection.neonMagenta.y, ArtDirection.neonMagenta.z, 1)
-                    : SIMD4(ArtDirection.neonCyan.x, ArtDirection.neonCyan.y, ArtDirection.neonCyan.z, 1)
                 add(
-                    meshes.plate,
-                    Math.translation(SIMD3(center.x + side * size.x * 0.52, size.y * 0.72, center.z))
-                        * Math.scale(SIMD3(0.1, 0.35, size.z * 0.65)),
-                    neon,
-                    material: 3,
-                    cast: false,
-                    receive: false
+                    meshes.wedge,
+                    Math.translation(SIMD3(center.x, size.y + 0.6, center.z)) * Math.scale(SIMD3(size.x * 0.95, 1.2, size.z * 0.95)),
+                    t,
+                    material: 4
                 )
             }
 
+        case .neonHotel:
+            add(meshes.beveled, Math.translation(massCenter) * Math.scale(massSize), body, material: 6)
+            if detail {
+                add(
+                    meshes.beveled,
+                    Math.translation(SIMD3(center.x, size.y + 1.0, center.z)) * Math.scale(SIMD3(size.x * 0.7, 2.0, size.z * 0.7)),
+                    shadow,
+                    material: 6
+                )
+                if hash(seed + 19) > 0.35 {
+                    let neon = hash(seed + 21) > 0.5
+                        ? SIMD4(ArtDirection.neonMagenta.x, ArtDirection.neonMagenta.y, ArtDirection.neonMagenta.z, 1)
+                        : SIMD4(ArtDirection.neonCyan.x, ArtDirection.neonCyan.y, ArtDirection.neonCyan.z, 1)
+                    add(
+                        meshes.plate,
+                        Math.translation(SIMD3(center.x + side * size.x * 0.52, size.y * 0.72, center.z))
+                            * Math.scale(SIMD3(0.1, 0.35, size.z * 0.65)),
+                        neon,
+                        material: 3,
+                        cast: false,
+                        receive: false
+                    )
+                }
+            }
+
         case .warehouseLoft:
-            let lowH = bodyH * 0.72
+            let lowH = (detail ? bodyH : size.y) * 0.72
+            let lowY = detail ? baseH + lowH * 0.5 : lowH * 0.5
             add(
                 meshes.beveled,
-                Math.translation(SIMD3(center.x, baseH + lowH * 0.5, center.z)) * Math.scale(SIMD3(size.x * 1.15, lowH, size.z * 1.1)),
+                Math.translation(SIMD3(center.x, lowY, center.z)) * Math.scale(SIMD3(size.x * 1.15, lowH, size.z * 1.1)),
                 body,
                 material: 6
             )
-            // Loading canopy / awning
             if detail {
                 add(
                     meshes.plate,
@@ -330,42 +337,42 @@ enum CityKit {
                     shadow,
                     material: 4
                 )
+                add(
+                    meshes.wedge,
+                    Math.translation(SIMD3(center.x, baseH + lowH + 0.8, center.z)) * Math.scale(SIMD3(size.x * 1.1, 1.4, size.z * 0.4)),
+                    shadow,
+                    material: 4
+                )
             }
-            // Sawtooth roof hint
-            add(
-                meshes.wedge,
-                Math.translation(SIMD3(center.x, baseH + lowH + 0.8, center.z)) * Math.scale(SIMD3(size.x * 1.1, 1.4, size.z * 0.4)),
-                shadow,
-                material: 4
-            )
 
         case .cornerClock:
-            add(meshes.beveled, Math.translation(bodyCenter) * Math.scale(SIMD3(size.x, bodyH, size.z)), body, material: 6)
-            // Clock drum
-            add(
-                meshes.cylinder,
-                Math.translation(SIMD3(center.x, size.y + 1.4, center.z + side * size.z * 0.1))
-                    * Math.scale(SIMD3(size.x * 0.45, 2.2, size.x * 0.45)),
-                shadow,
-                material: 4
-            )
-            add(
-                meshes.wedge,
-                Math.translation(SIMD3(center.x, size.y + 3.2, center.z + side * size.z * 0.1))
-                    * Math.scale(SIMD3(1.2, 1.6, 1.2)),
-                SIMD4(ArtDirection.sunSideWarm.x, ArtDirection.sunSideWarm.y, ArtDirection.sunSideWarm.z, 1),
-                material: 4
-            )
-            if detail && hash(seed + 33) > 0.6 {
+            add(meshes.beveled, Math.translation(massCenter) * Math.scale(massSize), body, material: 6)
+            if detail {
                 add(
-                    meshes.plate,
-                    Math.translation(SIMD3(center.x + side * size.x * 0.5, size.y * 0.5, center.z))
-                        * Math.scale(SIMD3(0.1, size.y * 0.2, size.z * 0.4)),
-                    warm,
-                    material: 3,
-                    cast: false,
-                    receive: false
+                    meshes.cylinder,
+                    Math.translation(SIMD3(center.x, size.y + 1.4, center.z + side * size.z * 0.1))
+                        * Math.scale(SIMD3(size.x * 0.45, 2.2, size.x * 0.45)),
+                    shadow,
+                    material: 4
                 )
+                add(
+                    meshes.wedge,
+                    Math.translation(SIMD3(center.x, size.y + 3.2, center.z + side * size.z * 0.1))
+                        * Math.scale(SIMD3(1.2, 1.6, 1.2)),
+                    SIMD4(ArtDirection.sunSideWarm.x, ArtDirection.sunSideWarm.y, ArtDirection.sunSideWarm.z, 1),
+                    material: 4
+                )
+                if hash(seed + 33) > 0.6 {
+                    add(
+                        meshes.plate,
+                        Math.translation(SIMD3(center.x + side * size.x * 0.5, size.y * 0.5, center.z))
+                            * Math.scale(SIMD3(0.1, size.y * 0.2, size.z * 0.4)),
+                        warm,
+                        material: 3,
+                        cast: false,
+                        receive: false
+                    )
+                }
             }
         }
     }

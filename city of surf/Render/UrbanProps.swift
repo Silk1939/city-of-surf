@@ -70,8 +70,8 @@ enum UrbanProps {
             Math.translation(position + SIMD3(0, 5.7 * s, 0)) * Math.scale(SIMD3(0.35 * s, 0.35 * s, 0.35 * s)),
             trunkColor
         )
-        // Frond fan — clear leaf silhouettes, not a green cube.
-        let frondCount = 6
+        // Frond fan — 4 blades keeps silhouette readable without blowing the draw budget.
+        let frondCount = 4
         for i in 0..<frondCount {
             let a = Float(i) / Float(frondCount) * (.pi * 2)
             let tilt = Math.rotation(radians: 0.85, axis: SIMD3(1, 0, 0))
