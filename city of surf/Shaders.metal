@@ -543,9 +543,9 @@ fragment float4 solidFragment(VOut in [[stage_in]],
                           frame.lightColor, frame.sunIntensity, shadow,
                           irradiance, prefiltered, brdf, frame.iblIntensity);
 
-    // HDR emissives (2–6 range) — bloom food after tonemap moves to composite.
+    // HDR emissives (2–3 range) — bloom food after tonemap moves to composite.
     if (windowEmit > 0.0) {
-        color += float3(1.0, 0.78, 0.35) * windowEmit * 4.0;
+        color += float3(1.0, 0.78, 0.35) * windowEmit * 2.0; // ArtDirection.windowGlowIntensity
     }
     // Warm sunset rim on building edges (flat front-above sun).
     if (in.materialId > 5.5 && in.materialId < 6.5) {
@@ -556,8 +556,8 @@ fragment float4 solidFragment(VOut in [[stage_in]],
     if (in.materialId > 2.5 && in.materialId < 3.5) {
         float rim = pow(1.0 - saturate(dot(N, V)), 2.0);
         float3 rimCol = mix(float3(0.220, 0.898, 1.0), in.color.rgb, 0.45); // neon cyan
-        color += rimCol * rim * 3.5;
-        color += in.color.rgb * 2.2;
+        color += rimCol * rim * 3.0; // ArtDirection.neonEmissiveMax
+        color += in.color.rgb * 2.0; // ArtDirection.neonEmissiveMin
     }
     if (in.materialId > 6.5 && in.materialId < 7.5) {
         // Wet deck sparkle — narrow, secondary to sun (not bloom food).
@@ -580,7 +580,7 @@ fragment float4 solidFragment(VOut in [[stage_in]],
                      - min(in.color.r, min(in.color.g, in.color.b));
         if (chroma > 0.35) {
             float pulse = 0.7 + 0.3 * sin(frame.time * 8.0);
-            color += in.color.rgb * pulse * 3.5;
+            color += in.color.rgb * pulse * 3.0; // ArtDirection.neonEmissiveMax
         }
     }
 
@@ -654,14 +654,14 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float sparkle2 = valueNoise(in.worldPos.xz * 5.5 + float2(-frame.time * 3.1, frame.time * 2.4));
     float glitterMask = smoothstep(0.55, 0.78, sparkle * 0.6 + sparkle2 * 0.4);
     float glitter = glitterCore * mix(0.15, 1.0, glitterMask);
-    water += frame.lightColor * glitter * 8.0;
+    water += frame.lightColor * glitter * 2.5; // ArtDirection.waterGlitterIntensity
 
     // Crest lip + SSS: sun through the lip → glowing turquoise.
     float rz = in.worldPos.z + frame.scrollZ;
     float lip = crest_lip(rz, frame.waveLength);
     float throughLip = saturate(dot(V, -L));
     float sss = pow(throughLip, 2.0) * lip;
-    water += float3(0.180, 0.769, 0.714) * 2.5 * sss;
+    water += float3(0.180, 0.769, 0.714) * 1.5 * sss; // ArtDirection.crestSSSIntensity
 
     // Chunky foam: vertex mask × 2-octave hard noise clusters (#FFF6E9).
     float2 foamUV = in.worldPos.xz * 0.42 + float2(frame.time * 0.15, -frame.time * 0.55);
@@ -776,9 +776,9 @@ fragment float4 compositeFragment(PostOut in [[stage_in]],
     constexpr sampler s(address::clamp_to_edge, filter::linear);
     float3 hdr = scene.sample(s, in.uv).rgb * fx.exposure;
     hdr += bloom.sample(s, in.uv).rgb * fx.bloomIntensity;
-    // Guard non-resident / bad samples (NaN/Inf → green/white garbage on device).
+    // Guard non-resident / bad samples (NaN/Inf → 0) and hard-cap hot pixels.
     hdr = select(hdr, float3(0.0), isnan(hdr) || isinf(hdr));
-    hdr = clamp(hdr, float3(0.0), float3(24.0));
+    hdr = clamp(hdr, float3(0.0), float3(64.0));
 
     // ACES filmic → saturation punch (~1.1) → subtle vignette (max ~15% corners).
     float3 mapped = tonemapACES(hdr);

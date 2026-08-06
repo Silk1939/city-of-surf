@@ -1003,7 +1003,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
 
         // Serialize GPU work onto one HDR/shadow target (no in-flight RT races).
-        let previousValueToWaitFor = frameIndex - 1
+        // frameIndex starts at maxBuffersInFlight (≥1) in init — never wait on UInt64(-1).
+        let previousValueToWaitFor = max(frameIndex - 1, 0)
         if !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10) {
             print("[FloodSurfer] WARN: frame wait timeout (target=\(previousValueToWaitFor)) — blocking")
             while !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 1000) {

@@ -18,9 +18,9 @@ enum ArtDirection {
     static let waterDeep = SIMD3<Float>(0.039, 0.227, 0.290)        // #0A3A4A
     static let waterMid = SIMD3<Float>(0.090, 0.500, 0.520)
     /// SSS glow through crest lip (#2EC4B6 * intensity).
-    static let crestSSSIntensity: Float = 2.5
+    static let crestSSSIntensity: Float = 1.5
     /// Narrow sun glitter HDR scale on water.
-    static let waterGlitterIntensity: Float = 8.0
+    static let waterGlitterIntensity: Float = 2.5
     /// GPU-only detail wave amps (must stay small vs gameplay amplitude; not in WaveField).
     static let waterDetailAmp0: Float = 0.12
     static let waterDetailAmp1: Float = 0.07
@@ -39,9 +39,9 @@ enum ArtDirection {
     static let coinGold = SIMD3<Float>(1.0, 0.84, 0.15)
     static let windowGlow = SIMD3<Float>(1.0, 0.78, 0.35)
     /// Additive HDR emissive scales (linear, pre-tonemap) — bloom food.
-    static let windowGlowIntensity: Float = 4.0
+    static let windowGlowIntensity: Float = 2.0
     static let neonEmissiveMin: Float = 2.0
-    static let neonEmissiveMax: Float = 6.0
+    static let neonEmissiveMax: Float = 3.0
 
     // MARK: - Lighting / grade
     /// Flat front-above sun — street runs +Z (camera looks down-canyon into the sun).
@@ -52,7 +52,7 @@ enum ArtDirection {
     /// Distance/height fog mixes toward horizon orange (never grey).
     static let fogWarm = skyHorizon
     /// Soft HDR sun disc scale in `skyFragment` (linear, pre-tonemap).
-    static let sunDiskIntensity: Float = 20.0
+    static let sunDiskIntensity: Float = 6.0
 
     /// Composite: exposure → bloom add → ACES → saturation → vignette.
     static let exposure: Float = 0.85
