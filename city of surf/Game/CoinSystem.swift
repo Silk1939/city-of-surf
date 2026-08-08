@@ -100,7 +100,7 @@ struct CoinSystem {
     func worldPosition(for coin: Coin, runDistance: Float, wave: WaveField, time: Float, scrollZ: Float) -> SIMD3<Float> {
         let worldZ = coin.localZ - runDistance
         let bob = sin(time * 7.0 + coin.localZ) * 0.25
-        let sample = wave.displacement(x: coin.x, z: worldZ, time: time, scrollZ: scrollZ)
+        let sample = wave.surfaceDisplacement(x: coin.x, z: worldZ, time: time, scrollZ: scrollZ)
         return SIMD3(coin.x + sample.x, sample.y + 1.55 + bob, worldZ + sample.z)
     }
 }

@@ -2,10 +2,13 @@
 //  WaveField.swift
 //  city of surf
 //
-//  Single flood-front height field — must match Shaders.metal.
+//  Single flood-front height field — MUST match flood_displace() in Shaders.metal.
 //
-//  Stabilization + Phase 7 scale: amplitude≈5.2 with matching ChaseCamera offsets.
-//  Giant crest must stay readable with city / sky; camera snaps above water on reset.
+//  Gerstner-style crest pinch (steep concave face + plunging lip), canyon-wall
+//  pile-up, 3-octave chop. `height` / `surfaceDisplacement` invert the horizontal
+//  pinch so gameplay sits on the *visual* surface, not the pre-pinch one.
+//
+//  Amplitude≈5.2 co-scales with ChaseCamera eyeOffset / lookAhead.
 //
 
 import simd
@@ -15,11 +18,13 @@ struct WaveField {
     var amplitude: Float = 5.2
     var faceWidth: Float = 14.0
     var speed: Float = 16.0
-    var steepness: Float = 0.62
+    /// 0.6 = soft rolling front, 0.9 = steep face, 1.1+ = plunging lip.
+    var steepness: Float = 0.95
     var direction: SIMD2<Float> = SIMD2(0, 1)
-    var rippleAmplitude: Float = 0.14
-    var rippleLength: Float = 5.0
+    var rippleAmplitude: Float = 0.12
+    var rippleLength: Float = 5.5
     /// Crest alignment relative to surfer; 0 = crest at player Z.
+    /// Folded into `frame.scrollZ` on the GPU (see GameState).
     var crestShift: Float = 0
 
     var wavelength: Float {
@@ -37,33 +42,78 @@ struct WaveField {
     }
 
     private func crestLip(_ rz: Float) -> Float {
-        let sigma = max(faceWidth * 0.18, 1.2)
+        let sigma = max(faceWidth * 0.20, 1.2)
         return exp(-(rz * rz) / (2.0 * sigma * sigma))
     }
 
+    /// Mirror of flood_displace() in Shaders.metal.
     func displacement(x: Float, z: Float, time: Float, scrollZ: Float) -> SIMD3<Float> {
         let rz = relativeZ(z, scrollZ: scrollZ)
+        let w = max(faceWidth, 0.5)
+        let sigma = max(w * 0.20, 1.2)
+        let a = amplitude
+        let q = steepness
+
         let body = floodBody(rz)
         let lip = crestLip(rz)
-        let a = amplitude
 
-        var y = a * (body * 0.88 + lip * steepness * 0.72)
-        let faceMask = body * (1.0 - body) * 4.0
-        let curl = faceMask * a * 0.42 * steepness
-        let dz = -curl
-        var dx: Float = 0
+        var d = SIMD3<Float>(0, 0, 0)
 
+        // Base bore + raised crest
+        d.y = a * (0.85 * body + 0.62 * q * lip)
+
+        // Gerstner-style pinch toward the crest
+        let pinch = (rz / sigma) * lip
+        d.z -= q * sigma * 0.95 * pinch
+
+        // Plunging throw at the very top of the lip
+        d.z += q * a * 0.18 * lip * lip
+        d.y += q * a * 0.10 * lip * lip
+
+        // Pile-up against the canyon walls
+        let wall = smoothstepf(4.5, 8.5, abs(x))
+        d.y += a * 0.16 * wall * body
+
+        // Three octaves of travelling chop
         let rk = (2.0 * Float.pi) / max(rippleLength, 0.001)
-        let chop = rippleAmplitude * sin(rk * x * 1.3 + rk * rz * 0.7 - time * 4.0)
-            * (0.35 + 0.65 * body)
-        y += chop
-        dx += rippleAmplitude * 0.15 * cos(rk * x - time * 3.0) * body
+        let chopAmp = rippleAmplitude * (0.25 + 0.75 * body)
+        let p1 = rk * (x * 0.8 + rz * 0.6) - time * 3.1
+        let p2 = rk * 0.53 * (x * -1.7 + rz * 1.3) - time * 2.3 + 1.7
+        let p3 = rk * 1.90 * (x * 2.6 + rz * -0.4) - time * 4.7 + 4.1
+        d.y += chopAmp * (0.50 * sin(p1) + 0.35 * sin(p2) + 0.15 * sin(p3))
+        d.x += chopAmp * 0.4 * cos(p1)
 
-        return SIMD3(dx, y, dz)
+        return d
     }
 
+    /// Foam intensity 0...1 (crest lip, face whitewater, Jacobian compression).
+    func foam(x: Float, z: Float, time: Float, scrollZ: Float) -> Float {
+        let rz = relativeZ(z, scrollZ: scrollZ)
+        let w = max(faceWidth, 0.5)
+        let sigma = max(w * 0.20, 1.2)
+        let body = floodBody(rz)
+        let lip = crestLip(rz)
+        let dpinch = (1.0 - (rz * rz) / (sigma * sigma)) * lip / sigma
+        let jac = 1.0 - steepness * sigma * 0.95 * dpinch
+        let faceMask = body * (1.0 - body) * 4.0
+        return min(max(1.25 * lip + 0.45 * faceMask + max(0.6 - jac, 0) * 1.2, 0), 1)
+    }
+
+    /// Displacement whose displaced Z lands on `z` (visual surface).
+    /// Use this for surfer / props / coins so they ride the pinched mesh.
+    func surfaceDisplacement(x: Float, z: Float, time: Float, scrollZ: Float) -> SIMD3<Float> {
+        var baseZ = z
+        for _ in 0..<2 {
+            let d = displacement(x: x, z: baseZ, time: time, scrollZ: scrollZ)
+            baseZ = z - d.z
+        }
+        let d = displacement(x: x, z: baseZ, time: time, scrollZ: scrollZ)
+        return SIMD3(d.x, d.y, baseZ + d.z - z)
+    }
+
+    /// Height of the *visual* surface at world (x, z).
     func height(x: Float, z: Float, time: Float, scrollZ: Float) -> Float {
-        displacement(x: x, z: z, time: time, scrollZ: scrollZ).y
+        surfaceDisplacement(x: x, z: z, time: time, scrollZ: scrollZ).y
     }
 
     func normal(x: Float, z: Float, time: Float, scrollZ: Float) -> SIMD3<Float> {
@@ -73,5 +123,10 @@ struct WaveField {
         let hD = height(x: x, z: z - eps, time: time, scrollZ: scrollZ)
         let hU = height(x: x, z: z + eps, time: time, scrollZ: scrollZ)
         return simd_normalize(SIMD3(hL - hR, 2.0 * eps, hD - hU))
+    }
+
+    private func smoothstepf(_ e0: Float, _ e1: Float, _ x: Float) -> Float {
+        let t = min(max((x - e0) / (e1 - e0), 0), 1)
+        return t * t * (3 - 2 * t)
     }
 }

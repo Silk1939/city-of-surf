@@ -90,8 +90,8 @@ struct ObstacleSystem {
     func worldPosition(for obstacle: Obstacle, runDistance: Float, wave: WaveField, time: Float, scrollZ: Float) -> SIMD3<Float> {
         let worldZ = obstacle.localZ - runDistance
         let x = obstacle.x
-        // Full displacement so props ride the flood curl with the mesh.
-        let sample = wave.displacement(x: x, z: worldZ, time: time, scrollZ: scrollZ)
+        // Visual surface (pinch inverted) so props ride the Gerstner flood with the mesh.
+        let sample = wave.surfaceDisplacement(x: x, z: worldZ, time: time, scrollZ: scrollZ)
         let bob = sin(time * 2.6 + obstacle.localZ) * 0.12
         let yOff: Float = obstacle.kind == .trafficLight ? obstacle.size.y * 0.35 : obstacle.size.y * 0.5
         return SIMD3(x + sample.x, sample.y + yOff + bob + 0.25, worldZ + sample.z)

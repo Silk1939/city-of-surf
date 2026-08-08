@@ -382,12 +382,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 dimensions: SIMD3(1, 1, 1),
                 vertexDescriptor: vd
             )
+            // Pinch compresses Z — denser segments along the street; X can be coarser.
             waveMesh = try MeshFactory.makePlane(
                 device: device,
                 width: 30,
                 depth: 140,
-                segmentsX: 40,
-                segmentsZ: 96,
+                segmentsX: 48,
+                segmentsZ: 280,
                 vertexDescriptor: vd
             )
             // Upright thin disk (Y axis) — spun around Y like classic pickup coins.

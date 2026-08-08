@@ -106,8 +106,8 @@ struct SurferController {
         }
 
         let baseZ: Float = 0
-        // Full wave displacement — match GPU flood curl so surfer sits on the face.
-        let sample = wave.displacement(x: x, z: baseZ, time: time, scrollZ: scrollZ)
+        // Visual surface (pinch inverted) — match GPU Gerstner flood so surfer sits on the face.
+        let sample = wave.surfaceDisplacement(x: x, z: baseZ, time: time, scrollZ: scrollZ)
         var y = sample.y + 0.4
         let h = currentHeight
 

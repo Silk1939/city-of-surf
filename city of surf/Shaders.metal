@@ -20,6 +20,7 @@ typedef struct
 {
     float4 position [[position]];
     float3 worldPos;
+    float3 basePos;      // undisplaced world pos → per-pixel wave normals
     float3 normal;
     float2 texCoord;
     float foam;
@@ -49,14 +50,7 @@ static float flood_body(float rz, float faceWidth)
 
 static float crest_lip(float rz, float faceWidth)
 {
-    float sigma = max(faceWidth * 0.18, 1.2);
-    return exp(-(rz * rz) / (2.0 * sigma * sigma));
-}
-
-/// Narrower lip used only for foam — geometry crest stays wider.
-static float foam_crest_lip(float rz, float faceWidth)
-{
-    float sigma = max(faceWidth * 0.042, 0.65);
+    float sigma = max(faceWidth * 0.20, 1.2);
     return exp(-(rz * rz) / (2.0 * sigma * sigma));
 }
 
@@ -79,80 +73,71 @@ static float valueNoise(float2 p)
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+/// Fragment-only micro chop for normals (distance-faded — kills specular shimmer).
+static float detail_height(float2 p, float t)
+{
+    float h = 0.0;
+    h += valueNoise(p * 0.85 + float2(0.0, -t * 1.1)) * 0.60;
+    h += valueNoise(p * 2.30 + float2(t * 0.4, -t * 2.2)) * 0.40;
+    return h;
+}
+
+/// MUST match WaveField.displacement() exactly.
 static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread float &foam)
 {
-    float rz = pos.z + frame.scrollZ;
-    float body = flood_body(rz, frame.waveLength);
-    float lip = crest_lip(rz, frame.waveLength);
-    float a = frame.waveAmplitude;
-    float steep = frame.waveSteepness;
+    float rz    = pos.z + frame.scrollZ;
+    float w     = max(frame.waveLength, 0.5);
+    float sigma = max(w * 0.20, 1.2);
+    float a     = frame.waveAmplitude;
+    float Q     = frame.waveSteepness;
+    float t     = frame.time;
+
+    float body = flood_body(rz, w);
+    float lip  = crest_lip(rz, w);
 
     float3 d = float3(0.0);
-    d.y = a * (body * 0.88 + lip * steep * 0.72);
 
-    float faceMask = body * (1.0 - body) * 4.0;
-    d.z = -(faceMask * a * 0.42 * steep);
+    // Base bore + raised crest
+    d.y = a * (0.85 * body + 0.62 * Q * lip);
 
+    // Gerstner-style pinch toward the crest → steep concave face; Q>~1.05 plunges.
+    float pinch = (rz / sigma) * lip;
+    d.z -= Q * sigma * 0.95 * pinch;
+
+    // Throw the lip slightly forward and up (plunging feel)
+    d.z += Q * a * 0.18 * lip * lip;
+    d.y += Q * a * 0.10 * lip * lip;
+
+    // Water piles up against canyon walls
+    float wall = smoothstep(4.5, 8.5, abs(pos.x));
+    d.y += a * 0.16 * wall * body;
+
+    // Three octaves of travelling chop (synced with WaveField)
     float rk = (2.0 * M_PI_F) / max(frame.rippleLength, 0.001);
-    float chop = frame.rippleAmplitude
-        * sin(rk * pos.x * 1.3 + rk * rz * 0.7 - frame.time * 4.0)
-        * (0.35 + 0.65 * body);
-    d.y += chop;
-    d.x += frame.rippleAmplitude * 0.15 * cos(rk * pos.x - frame.time * 3.0) * body;
+    float chopAmp = frame.rippleAmplitude * (0.25 + 0.75 * body);
+    float p1 = rk * (pos.x * 0.8 + rz * 0.6) - t * 3.1;
+    float p2 = rk * 0.53 * (pos.x * -1.7 + rz * 1.3) - t * 2.3 + 1.7;
+    float p3 = rk * 1.90 * (pos.x * 2.6 + rz * -0.4) - t * 4.7 + 4.1;
+    d.y += chopAmp * (0.50 * sin(p1) + 0.35 * sin(p2) + 0.15 * sin(p3));
+    d.x += chopAmp * 0.4 * cos(p1);
 
-    // Foam mask only — chunky hard edge is applied in waveFragment.
-    float foamLip = foam_crest_lip(rz, frame.waveLength);
-    foam = saturate(foamLip * 1.25 + faceMask * 0.1);
+    // Jacobian of the pinch: compressing surface → whitewater
+    float dpinch = (1.0 - (rz * rz) / (sigma * sigma)) * lip / sigma;
+    float jac = 1.0 - Q * sigma * 0.95 * dpinch;
+    float faceMask = body * (1.0 - body) * 4.0;
+    foam = saturate(1.25 * lip + 0.45 * faceMask + saturate(0.6 - jac) * 1.2);
+
     return pos + d;
 }
 
-/// GPU-only Gerstner-like detail (visual). Amplitudes < 0.15 — never mirror into WaveField.
-static float3 visual_wave_detail(float3 pos, constant FrameUniforms &frame)
+/// Per-pixel geometric normal from undisplaced position (central differences).
+static float3 wave_normal(float3 basePos, constant FrameUniforms &frame)
 {
-    float t = frame.time;
-    float3 d = float3(0.0);
-
-    float k1 = 2.15;
-    float a1 = 0.09;
-    float p1 = pos.x * k1 + pos.z * k1 * 0.55 - t * 3.4;
-    float s1 = sin(p1);
-    float c1 = cos(p1);
-    d.y += a1 * s1;
-    d.x += a1 * 0.35 * c1;
-
-    float k2 = 4.7;
-    float a2 = 0.05;
-    float p2 = pos.x * k2 * 0.65 - pos.z * k2 * 0.85 - t * 5.6;
-    float s2 = sin(p2);
-    float c2 = cos(p2);
-    d.y += a2 * s2;
-    d.z += a2 * 0.28 * c2;
-
-    return d;
-}
-
-static float3 wave_visual_position(float3 pos, constant FrameUniforms &frame, thread float &foam)
-{
-    return flood_displace(pos, frame, foam) + visual_wave_detail(pos, frame);
-}
-
-static float3 flood_normal(float3 pos, constant FrameUniforms &frame)
-{
-    float eps = 0.35;
+    float eps = 0.15;
     float foam = 0.0;
-    float3 c = flood_displace(pos, frame, foam);
-    float3 px = flood_displace(pos + float3(eps, 0, 0), frame, foam);
-    float3 pz = flood_displace(pos + float3(0, 0, eps), frame, foam);
-    return normalize(cross(pz - c, px - c));
-}
-
-static float3 wave_visual_normal(float3 pos, constant FrameUniforms &frame)
-{
-    float eps = 0.28;
-    float foam = 0.0;
-    float3 c = wave_visual_position(pos, frame, foam);
-    float3 px = wave_visual_position(pos + float3(eps, 0, 0), frame, foam);
-    float3 pz = wave_visual_position(pos + float3(0, 0, eps), frame, foam);
+    float3 c  = flood_displace(basePos, frame, foam);
+    float3 px = flood_displace(basePos + float3(eps, 0, 0), frame, foam);
+    float3 pz = flood_displace(basePos + float3(0, 0, eps), frame, foam);
     return normalize(cross(pz - c, px - c));
 }
 
@@ -373,6 +358,7 @@ static VOut solidVertexCommon(Vertex in,
     VOut out;
     float4 world = object.modelMatrix * float4(in.position, 1.0);
     out.worldPos = world.xyz;
+    out.basePos = world.xyz;
     out.position = frame.viewProjectionMatrix * world;
     out.texCoord = in.texCoord;
     out.foam = 0.0;
@@ -594,11 +580,12 @@ vertex VOut waveVertex(Vertex in [[stage_in]],
     VOut out;
     float4 worldBase = object.modelMatrix * float4(in.position, 1.0);
     float foam = 0.0;
-    // Gameplay flood shape + GPU-only detail octaves (not in WaveField).
-    float3 displaced = wave_visual_position(worldBase.xyz, frame, foam);
+    float3 displaced = flood_displace(worldBase.xyz, frame, foam);
+    out.basePos = worldBase.xyz;
     out.worldPos = displaced;
     out.position = frame.viewProjectionMatrix * float4(displaced, 1.0);
-    out.normal = wave_visual_normal(worldBase.xyz, frame);
+    // Real normal is computed per-pixel in waveFragment (kills specular glitter).
+    out.normal = float3(0.0, 1.0, 0.0);
     out.texCoord = in.texCoord;
     out.foam = foam;
     out.materialId = 0.0;
@@ -620,72 +607,74 @@ fragment float4 waveFragment(VOut in [[stage_in]],
 {
     constexpr sampler iblSampler(s_address::repeat, t_address::clamp_to_edge, filter::linear);
 
-    float3 N = normalize(in.normal);
-    float3 V = normalize(frame.cameraPosition - in.worldPos);
+    float3 cam = frame.cameraPosition;
+    float3 V = normalize(cam - in.worldPos);
     float3 L = normalize(frame.lightDirection);
-    float NdotV = saturate(dot(N, V));
-    float fresnel = pow(1.0 - NdotV, 2.6);
+    float t = frame.time;
+    float dist = length(in.worldPos - cam);
+    float detailFade = exp(-dist * 0.028);
 
-    // Body: deep teal when looking steep, shallow turquoise toward lip.
+    // Per-pixel geometric normal + distance-faded micro-detail (no vertex glitter).
+    float3 N = wave_normal(in.basePos, frame);
+    {
+        float de = 0.35;
+        float hC = detail_height(in.basePos.xz, t);
+        float hX = detail_height(in.basePos.xz + float2(de, 0), t);
+        float hZ = detail_height(in.basePos.xz + float2(0, de), t);
+        float2 grad = float2(hC - hX, hC - hZ) / de;
+        N = normalize(N + float3(grad.x, 0.0, grad.y) * 0.20 * detailFade);
+    }
+
+    float NdotV = saturate(dot(N, V));
+    float ndotl = saturate(dot(N, L));
+
+    // Schlick fresnel (F0 of water ≈ 0.02)
+    float fresnel = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
+
+    // Body: deep teal → shallow turquoise by height (art-direction palette).
     float3 deep = float3(0.039, 0.227, 0.290);      // #0A3A4A
     float3 mid = float3(0.090, 0.500, 0.520);
     float3 shallow = float3(0.180, 0.769, 0.714);   // #2EC4B6
-    float h = saturate(in.worldPos.y / max(frame.waveAmplitude, 0.001));
-    float3 water = mix(deep, mid, smoothstep(0.0, 0.4, h));
-    water = mix(water, shallow, smoothstep(0.4, 0.95, h));
-    // Grazing = orange sky reflection dominates; steep = deep teal body.
-    water = mix(water, deep * 1.05, NdotV);
+    float a = max(frame.waveAmplitude, 0.001);
+    float h = saturate(in.worldPos.y / (a * 1.35));
+    float3 water = mix(deep, mid, smoothstep(0.05, 0.55, h));
+    water = mix(water, shallow, smoothstep(0.55, 0.95, h));
 
     float edge = saturate((abs(in.worldPos.x) - 4.5) / 6.5);
     float edgeShade = mix(1.0, 0.78, edge * edge);
-    water *= edgeShade;
+    water *= edgeShade * (0.45 + 0.55 * ndotl);
 
-    // Analytic sky fresnel (shared SkyCommon) — flat look = orange, steep = teal body above.
+    // Procedural sky reflection (shared SkyCommon) — warm horizon orange.
     float3 R = reflect(-V, N);
     float3 skyCol = evaluateProceduralSky(R, frame.lightDirection, frame.lightColor, frame.sunIntensity);
-    water = mix(water, skyCol, fresnel * 0.85);
+    float sunSpot = pow(saturate(dot(R, L)), 320.0);
+    water = mix(water, skyCol, fresnel);
 
-    // Money-shot sun glitter: narrow HDR streak, noise breakup.
-    float3 H = normalize(L + V);
-    float street = 1.0 - smoothstep(0.35, 2.8, abs(in.worldPos.x));
-    float glitterCore = pow(saturate(dot(N, H)), 160.0) * street;
-    glitterCore += pow(saturate(dot(N, L)), 48.0) * street * 0.25;
-    float sparkle = valueNoise(in.worldPos.xz * 2.4 + float2(frame.time * 4.2, -frame.time * 1.8));
-    float sparkle2 = valueNoise(in.worldPos.xz * 5.5 + float2(-frame.time * 3.1, frame.time * 2.4));
-    float glitterMask = smoothstep(0.55, 0.78, sparkle * 0.6 + sparkle2 * 0.4);
-    float glitter = glitterCore * mix(0.15, 1.0, glitterMask);
-    water += frame.lightColor * glitter * 2.5; // ArtDirection.waterGlitterIntensity
-
-    // Crest lip + SSS: sun through the lip → glowing turquoise.
-    float rz = in.worldPos.z + frame.scrollZ;
-    float lip = crest_lip(rz, frame.waveLength);
-    float throughLip = saturate(dot(V, -L));
-    float sss = pow(throughLip, 2.0) * lip;
+    // Subsurface scattering: crest glows turquoise when backlit.
+    float sss = pow(saturate(dot(V, -L) * 0.5 + 0.5), 2.5) * pow(h, 2.0);
     water += float3(0.180, 0.769, 0.714) * 1.5 * sss; // ArtDirection.crestSSSIntensity
 
-    // Chunky foam: vertex mask × 2-octave hard noise clusters (#FFF6E9).
-    float2 foamUV = in.worldPos.xz * 0.42 + float2(frame.time * 0.15, -frame.time * 0.55);
-    float n0 = valueNoise(foamUV);
-    float n1 = valueNoise(foamUV * 2.3 + float2(17.1, 9.3));
-    float chunk = n0 * 0.55 + n1 * 0.45;
-    float foamCluster = smoothstep(0.48, 0.55, chunk); // hard stylized edge
-    float foamAmt = step(0.22, in.foam) * foamCluster;
-
-    // Thin foam lines riding the crest, scrolling backward with time.
-    float lineRz = rz - frame.time * 3.2 + sin(in.worldPos.x * 1.7) * 0.45;
-    float crestLine = foam_crest_lip(lineRz, frame.waveLength);
-    float lineNoise = step(0.5, valueNoise(float2(in.worldPos.x * 1.2, frame.time * 0.8)));
-    float foamLines = step(0.62, crestLine) * lineNoise;
-
-    float3 foamCol = float3(1.0, 0.965, 0.914);
-    water = mix(water, foamCol, saturate(foamAmt + foamLines * 0.85));
+    // Jacobian foam from vertex + streak/sparkle breakup (#FFF6E9).
+    float streak  = valueNoise(in.basePos.xz * float2(0.55, 0.16) + float2(0.0, -t * 1.6));
+    float sparkle = valueNoise(in.basePos.xz * 3.1 + float2(t * 0.7, -t * 3.0));
+    float foamMask = smoothstep(0.42, 0.72,
+                                in.foam
+                                + (streak - 0.5) * 0.55 * in.foam
+                                + (sparkle - 0.5) * 0.20);
+    float3 foamCol = float3(1.0, 0.965, 0.914) * (0.55 + 0.45 * ndotl);
+    water = mix(water, foamCol, foamMask * 0.92);
 
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
     irr = mix(irr, irr * kSkyHorizon * 1.3, 0.5);
     water += irr * 0.035 * frame.iblIntensity;
 
-    float spec = pow(saturate(dot(N, H)), 56.0) * (0.25 + 0.75 * fresnel);
-    water += spec * frame.lightColor * frame.sunIntensity * 0.35 * edgeShade;
+    // Sun specular: tight up close, broader + dimmer far away (no gold glitter).
+    float3 H = normalize(L + V);
+    float specPow = mix(60.0, 380.0, detailFade);
+    float spec = pow(saturate(dot(N, H)), specPow);
+    spec = min(spec * (0.2 + 0.8 * fresnel) * (0.15 + 2.2 * detailFade), 1.6);
+    water += frame.lightColor * frame.sunIntensity * spec * 0.55 * edgeShade * (1.0 - foamMask * 0.6);
+    water += frame.lightColor * sunSpot * fresnel * 0.55 * (1.0 - foamMask);
 
     return float4(applyHorizonFog(water, in.worldPos, frame.cameraPosition), 1.0);
 }
