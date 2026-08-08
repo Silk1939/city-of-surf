@@ -116,19 +116,25 @@ struct SurferVisual {
         }
     }
 
-    func appendDrawItems(
-        to items: inout [DrawItem],
-        meshes: SurferMeshes,
-        surfer: SurferController,
-        rootLean: Float
-    ) {
+    /// Wurzeltransform der Figur. Ausgelagert, damit der Test-Harness Scale,
+    /// Determinante und NaN prüfen kann, ohne Metal-Meshes zu bauen.
+    static func rootTransform(surfer: SurferController, rootLean: Float) -> matrix_float4x4 {
         let sp = surfer.position
         let sh = surfer.currentHeight
         // Lean from carve + soft water-surface roll/pitch so the silhouette rides the face.
         let leanRot = Math.rotation(radians: rootLean * 0.28 + surfer.surfaceRoll * 0.55, axis: SIMD3(0, 0, 1))
         let pitchRot = Math.rotation(radians: surfer.surfacePitch * 0.65, axis: SIMD3(1, 0, 0))
         // Match previous visual center: position is collision center; figure stands on board below.
-        let root = Math.translation(SIMD3(sp.x, sp.y - sh * 0.42, sp.z)) * leanRot * pitchRot
+        return Math.translation(SIMD3(sp.x, sp.y - sh * 0.42, sp.z)) * leanRot * pitchRot
+    }
+
+    func appendDrawItems(
+        to items: inout [DrawItem],
+        meshes: SurferMeshes,
+        surfer: SurferController,
+        rootLean: Float
+    ) {
+        let root = Self.rootTransform(surfer: surfer, rootLean: rootLean)
 
         let suit = SIMD4<Float>(0.10, 0.10, 0.11, 1)
         let skin = SIMD4<Float>(0.72, 0.48, 0.36, 1)

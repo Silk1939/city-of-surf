@@ -86,78 +86,35 @@ enum DebugMarkers {
 
     private static var didLogFrameOne = false
 
-    /// Einmalige Messung: Spieler- und Kamerazustand, Clip-/NDC-Koordinate des
-    /// Spieler-Ursprungs, Skalierung aus der Model-Matrix, Draw-Call-Zahl des Surfers.
-    static func logPlayerProjection(
-        playerPosition: SIMD3<Float>,
-        playerHeight: Float,
-        cameraEye: SIMD3<Float>,
-        cameraTarget: SIMD3<Float>,
-        nearZ: Float,
-        farZ: Float,
-        fovDegrees: Float,
-        aspect: Float,
-        viewProjection: matrix_float4x4,
-        surferModelMatrix: matrix_float4x4?,
-        surferDrawCalls: Int,
-        markerDrawCalls: Int,
-        totalUniqueDraws: Int,
-        clampedDraws: Bool
-    ) {
+    /// Schreibt den ersten Messdatensatz lesbar in die Konsole. Die vollständigen
+    /// Werte jedes Frames landen als JSON beim `FrameDiagnosticsRecorder`.
+    static func logFrameOnce(_ d: FrameDiagnostics) {
         guard logFrameOneDiagnostics, !didLogFrameOne else { return }
         didLogFrameOne = true
 
-        func project(_ p: SIMD3<Float>) -> (clip: SIMD4<Float>, ndc: SIMD3<Float>) {
-            let clip = viewProjection * SIMD4(p.x, p.y, p.z, 1)
-            let w = clip.w
-            guard abs(w) > 1e-6 else { return (clip, SIMD3(repeating: .nan)) }
-            return (clip, SIMD3(clip.x / w, clip.y / w, clip.z / w))
-        }
-
-        let center = project(playerPosition)
-        let head = project(playerPosition + SIMD3(0, playerHeight * 0.5, 0))
-        let feet = project(playerPosition - SIMD3(0, playerHeight * 0.5, 0))
-        let forward = simd_normalize(cameraTarget - cameraEye)
-
-        var scaleText = "n/a (kein Surfer-DrawItem)"
-        if let m = surferModelMatrix {
-            let sx = simd_length(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z))
-            let sy = simd_length(SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z))
-            let sz = simd_length(SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
-            let t = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
-            scaleText = String(
-                format: "scale=(%.3f, %.3f, %.3f) translation=(%.3f, %.3f, %.3f)",
-                sx, sy, sz, t.x, t.y, t.z
-            )
-        }
-
-        let onScreen = abs(center.ndc.x) <= 1 && abs(center.ndc.y) <= 1
-            && center.ndc.z >= 0 && center.ndc.z <= 1
-
         let p = "[FloodSurfer FrameOne]"
-        print("\(p) ===== Befund A: Messung, keine Vermutung =====")
-        print(String(format: "\(p) player.position   = (%.3f, %.3f, %.3f)  height=%.3f",
-                     playerPosition.x, playerPosition.y, playerPosition.z, playerHeight))
-        print(String(format: "\(p) camera.eye        = (%.3f, %.3f, %.3f)",
-                     cameraEye.x, cameraEye.y, cameraEye.z))
-        print(String(format: "\(p) camera.target     = (%.3f, %.3f, %.3f)",
-                     cameraTarget.x, cameraTarget.y, cameraTarget.z))
-        print(String(format: "\(p) camera.forward    = (%.3f, %.3f, %.3f)",
-                     forward.x, forward.y, forward.z))
+        let c = d.camera
+        let pl = d.player
+        print("\(p) ===== Messung, keine Vermutung =====")
+        print(String(format: "\(p) player.position  = (%.3f, %.3f, %.3f)  height=%.3f",
+                     pl.position.x, pl.position.y, pl.position.z, pl.height))
+        print(String(format: "\(p) camera.eye       = (%.3f, %.3f, %.3f)", c.eye.x, c.eye.y, c.eye.z))
+        print(String(format: "\(p) camera.forward   = (%.3f, %.3f, %.3f)", c.forward.x, c.forward.y, c.forward.z))
+        print(String(format: "\(p) camera.target    = (%.3f, %.3f, %.3f)", c.target.x, c.target.y, c.target.z))
         print(String(format: "\(p) near=%.3f far=%.1f fov=%.2f° aspect=%.4f",
-                     nearZ, farZ, fovDegrees, aspect))
-        print(String(format: "\(p) eye→player dist   = %.3f m", simd_distance(cameraEye, playerPosition)))
-        print(String(format: "\(p) clip(origin)      = (%.3f, %.3f, %.3f, w=%.3f)",
-                     center.clip.x, center.clip.y, center.clip.z, center.clip.w))
-        print(String(format: "\(p) NDC(origin)       = (%.3f, %.3f, %.3f)",
-                     center.ndc.x, center.ndc.y, center.ndc.z))
-        print(String(format: "\(p) NDC(head)         = (%.3f, %.3f, %.3f)",
-                     head.ndc.x, head.ndc.y, head.ndc.z))
-        print(String(format: "\(p) NDC(feet)         = (%.3f, %.3f, %.3f)",
-                     feet.ndc.x, feet.ndc.y, feet.ndc.z))
-        print("\(p) origin im Frustum? \(onScreen)   (NDC.y < -1 = unter dem unteren Bildrand)")
-        print("\(p) surfer model matrix: \(scaleText)")
-        print("\(p) draw calls: surfer=\(surferDrawCalls) marker=\(markerDrawCalls) uniqueTotal=\(totalUniqueDraws) clamped=\(clampedDraws)")
-        print("\(p) ==============================================")
+                     c.nearZ, c.farZ, c.fovDegrees, c.aspect))
+        print(String(format: "\(p) clip(origin)     = (%.3f, %.3f, %.3f, w=%.3f)",
+                     pl.clip.x, pl.clip.y, pl.clip.z, pl.clip.w))
+        print(String(format: "\(p) NDC(origin)      = (%.3f, %.3f, %.3f)", pl.ndc.x, pl.ndc.y, pl.ndc.z))
+        print("\(p) inFrustum=\(pl.inFrustum) drawn=\(pl.drawn)")
+        print(String(format: "\(p) modelScale       = (%.3f, %.3f, %.3f) det=%.4f",
+                     pl.modelScale.x, pl.modelScale.y, pl.modelScale.z, pl.modelDeterminant))
+        print("\(p) invisibleReason  = \(pl.invisibleReason.isEmpty ? "— (sichtbar)" : pl.invisibleReason)")
+        print("\(p) draws: player=\(d.draws.player) marker=\(d.draws.marker) water=\(d.draws.water) buildings=\(d.draws.buildings) coins=\(d.draws.coins) vehicles=\(d.draws.vehicles) fx=\(d.draws.fx) unique=\(d.draws.uniqueTotal) clamped=\(d.draws.clamped)")
+        print(String(format: "\(p) wave: min=%.3f max=%.3f avg=%.3f range=%.3f (n=%d)",
+                     d.wave.minY, d.wave.maxY, d.wave.avgY, d.wave.range, d.wave.samples))
+        print("\(p) coinsInsideNearPlane = \(d.coinsInsideNearPlane)")
+        print("\(p) nonFiniteMatrices    = \(d.nonFiniteMatrices.isEmpty ? "keine" : d.nonFiniteMatrices.joined(separator: ", "))")
+        print("\(p) ====================================")
     }
 }

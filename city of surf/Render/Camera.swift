@@ -110,3 +110,41 @@ struct ChaseCamera {
         Math.perspective(fovyRadians: Math.radians(fovDegrees), aspectRatio: aspect, nearZ: nearZ, farZ: farZ)
     }
 }
+
+extension ChaseCamera {
+
+    /// Einziger Ort, an dem die Kamera pro Frame nachgeführt wird.
+    ///
+    /// Renderer und Test-Harness rufen exakt diese Funktion. Sonst würde der
+    /// Harness eine Kamera messen, die es im Spiel gar nicht gibt — dieselbe Falle
+    /// wie ein Höhenfeld, das CPU und Shader getrennt berechnen.
+    mutating func follow(
+        surfer: SurferController,
+        wave: WaveField,
+        time: Float,
+        scrollZ: Float,
+        shake: Float,
+        speed: Float,
+        deltaTime: Float
+    ) {
+        let waveY = wave.height(
+            x: surfer.x,
+            z: surfer.position.z,
+            time: time,
+            scrollZ: scrollZ
+        )
+        // Sample water under the chase eye so we never bury the camera in the crest.
+        let eyeZ = surfer.position.z + eyeOffset.z
+        let eyeX = surfer.position.x + surfer.lean * 1.35
+        let eyeWaterY = wave.height(x: eyeX, z: eyeZ, time: time, scrollZ: scrollZ)
+        update(
+            follow: surfer.position,
+            waveHeight: waveY,
+            eyeWaterHeight: eyeWaterY,
+            lean: surfer.lean,
+            shake: shake,
+            speed: speed,
+            deltaTime: deltaTime
+        )
+    }
+}

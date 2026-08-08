@@ -109,6 +109,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     /// Index range der Surfer-/Board-DrawItems in der aktuellen Draw-Liste (Befund-A-Messung).
     private var surferDrawRange: Range<Int> = 0..<0
     private var markerDrawCount = 0
+    private let diagnosticsRecorder = FrameDiagnosticsRecorder()
 
     @MainActor
     init?(metalKitView: MTKView, gameState: GameState) {
@@ -645,6 +646,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         return postFXUniformBuffer.gpuAddress + UInt64(offset)
     }
 
+#if !targetEnvironment(simulator)
     private func writePostFX(
         time: Float,
         blurDirection: SIMD2<Float>,
@@ -666,6 +668,119 @@ final class Renderer: NSObject, MTKViewDelegate {
         encoder.setRenderPipelineState(pipeline)
         encoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
         encoder.drawPrimitives(primitiveType: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+#endif
+
+    /// Sammelt den Messdatensatz eines Frames. Rein lesend — verändert nichts am Bild.
+    /// Die Klassifikation der Draw-Calls läuft über `materialId`; der Spieler wird
+    /// über den in `buildDrawList` gemerkten Indexbereich gezählt, damit der
+    /// Schritt-1-Marker (gleiches Material 3) ihn nicht verfälscht.
+    private func collectDiagnostics(
+        state: GameState,
+        draws: [DrawItem],
+        viewMatrix: matrix_float4x4,
+        projectionMatrix: matrix_float4x4,
+        viewProjection: matrix_float4x4,
+        cpuFrameMs: Float,
+        gpuWaitMs: Float
+    ) -> FrameDiagnostics {
+        let markerRange = surferDrawRange.upperBound..<(surferDrawRange.upperBound + markerDrawCount)
+
+        var census = FrameDiagnostics.DrawCensus()
+        census.player = surferDrawRange.count
+        census.marker = markerDrawCount
+        for (i, item) in draws.enumerated() {
+            if surferDrawRange.contains(i) || markerRange.contains(i) { continue }
+            if item.isWave {
+                census.water += 1
+                continue
+            }
+            switch item.materialId {
+            case 4.5..<5.5: census.coins += 1
+            case 5.5..<6.5: census.buildings += 1
+            case 3.5..<4.5: census.vehicles += 1
+            case 7.5..<8.5: census.fx += 1
+            case 1.5..<2.5, 0.5..<1.5: census.props += 1
+            default: census.other += 1
+            }
+        }
+        for batch in instanceStreamer.batches {
+            switch batch.materialId {
+            case 4.5..<5.5: census.coins += batch.instanceCount
+            case 5.5..<6.5: census.buildings += batch.instanceCount
+            case 3.5..<4.5: census.vehicles += batch.instanceCount
+            case 7.5..<8.5: census.fx += batch.instanceCount
+            default: census.props += batch.instanceCount
+            }
+        }
+        census.uniqueTotal = draws.count
+        census.instancedBatches = instanceStreamer.drawCallCount
+        census.instancedTotal = instanceStreamer.instanceTotal
+        census.clamped = draws.count > maxObjectsPerFrame
+
+        let playerPos = state.surfer.position
+        let drawn = !surferDrawRange.isEmpty
+        let playerModel = drawn ? draws[surferDrawRange.lowerBound].modelMatrix : matrix_identity_float4x4
+        let modelScale = drawn ? DiagnosticsMath.scale(of: playerModel) : SIMD3<Float>(repeating: 0)
+        let projected = DiagnosticsMath.project(playerPos, viewProjection: viewProjection)
+
+        var nonFinite: [String] = []
+        if DiagnosticsMath.containsNonFinite(viewMatrix) { nonFinite.append("view") }
+        if DiagnosticsMath.containsNonFinite(projectionMatrix) { nonFinite.append("projection") }
+        if DiagnosticsMath.containsNonFinite(viewProjection) { nonFinite.append("viewProjection") }
+        if DiagnosticsMath.containsNonFinite(playerModel) { nonFinite.append("playerModel") }
+        if DiagnosticsMath.containsNonFinite(playerPos) { nonFinite.append("playerPosition") }
+        if DiagnosticsMath.containsNonFinite(camera.smoothEye) { nonFinite.append("cameraEye") }
+
+        let eye = camera.smoothEye
+        let target = playerPos + camera.lookAhead
+
+        return FrameDiagnostics(
+            frame: frameIndex,
+            time: state.time,
+            camera: FrameDiagnostics.CameraInfo(
+                eye: eye,
+                forward: simd_normalize(target - eye),
+                target: target,
+                nearZ: camera.nearZ,
+                farZ: camera.farZ,
+                fovDegrees: camera.fovDegrees,
+                aspect: aspect
+            ),
+            player: FrameDiagnostics.PlayerInfo(
+                position: playerPos,
+                height: state.surfer.currentHeight,
+                clip: projected.clip,
+                ndc: projected.ndc,
+                inFrustum: DiagnosticsMath.inFrustum(ndc: projected.ndc),
+                drawn: drawn,
+                modelScale: modelScale,
+                modelDeterminant: DiagnosticsMath.determinant(of: playerModel),
+                invisibleReason: DiagnosticsMath.invisibleReason(
+                    clip: projected.clip, ndc: projected.ndc, drawn: drawn, scale: modelScale
+                )
+            ),
+            draws: census,
+            wave: .measure(
+                wave: state.wave,
+                time: state.time,
+                scrollZ: state.scrollZ,
+                centerX: playerPos.x,
+                nearZ: eye.z,
+                farZ: eye.z + 80
+            ),
+            coinsInsideNearPlane: CoinDiagnostics.countInsideNearPlane(
+                coins: state.coinSystem,
+                runDistance: state.runDistance,
+                wave: state.wave,
+                time: state.time,
+                scrollZ: state.scrollZ,
+                cameraEye: eye,
+                nearZ: camera.nearZ
+            ),
+            nonFiniteMatrices: nonFinite,
+            timing: FrameDiagnostics.Timing(cpuFrameMs: cpuFrameMs, gpuWaitMs: gpuWaitMs)
+        )
     }
 
     private func buildDrawList(state: GameState) -> [DrawItem] {
@@ -888,6 +1003,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         return items
     }
 
+#if !targetEnvironment(simulator)
     private func bindMaterialTextures(materialId: Float) {
         let mat: PBRMaterialTextures
         switch materialId {
@@ -966,6 +1082,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             encodeMesh(batch.mesh, encoder: encoder, instanceCount: batch.instanceCount)
         }
     }
+#endif
 
     func draw(in view: MTKView) {
 #if !targetEnvironment(simulator)
@@ -977,6 +1094,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTime, 1.0 / 20.0))
         lastTime = now
+        let cpuFrameStart = now
 
         state.update(deltaTime: dt)
         fpsAccum += dt
@@ -1026,26 +1144,11 @@ final class Renderer: NSObject, MTKViewDelegate {
             deltaTime: dt
         )
 
-        let waveY = state.wave.height(
-            x: state.surfer.x,
-            z: state.surfer.position.z,
+        camera.follow(
+            surfer: state.surfer,
+            wave: state.wave,
             time: state.time,
-            scrollZ: state.scrollZ
-        )
-        // Sample water under the chase eye so we never bury the camera in the crest.
-        let eyeZ = state.surfer.position.z + camera.eyeOffset.z
-        let eyeX = state.surfer.position.x + state.surfer.lean * 1.35
-        let eyeWaterY = state.wave.height(
-            x: eyeX,
-            z: eyeZ,
-            time: state.time,
-            scrollZ: state.scrollZ
-        )
-        camera.update(
-            follow: state.surfer.position,
-            waveHeight: waveY,
-            eyeWaterHeight: eyeWaterY,
-            lean: state.surfer.lean,
+            scrollZ: state.scrollZ,
             shake: state.wipeoutShake,
             speed: state.speed,
             deltaTime: dt
@@ -1054,12 +1157,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         // Serialize GPU work onto one HDR/shadow target (no in-flight RT races).
         // frameIndex starts at maxBuffersInFlight (≥1) in init — never wait on UInt64(-1).
         let previousValueToWaitFor = max(frameIndex - 1, 0)
+        let gpuWaitStart = CACurrentMediaTime()
         if !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10) {
             print("[FloodSurfer] WARN: frame wait timeout (target=\(previousValueToWaitFor)) — blocking")
             while !endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 1000) {
                 print("[FloodSurfer] WARN: still waiting for GPU frame \(previousValueToWaitFor)")
             }
         }
+
+        let gpuWaitMs = Float((CACurrentMediaTime() - gpuWaitStart) * 1000)
 
         uniformBufferIndex = (uniformBufferIndex + 1) % maxBuffersInFlight
         hdrPipeline.setActiveSlot(0)
@@ -1099,22 +1205,17 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         objectDrawCount = min(draws.count, maxObjectsPerFrame)
 
-        DebugMarkers.logPlayerProjection(
-            playerPosition: state.surfer.position,
-            playerHeight: state.surfer.currentHeight,
-            cameraEye: camera.smoothEye,
-            cameraTarget: state.surfer.position + camera.lookAhead,
-            nearZ: camera.nearZ,
-            farZ: camera.farZ,
-            fovDegrees: camera.fovDegrees,
-            aspect: aspect,
+        let diagnostics = collectDiagnostics(
+            state: state,
+            draws: draws,
+            viewMatrix: viewM,
+            projectionMatrix: projM,
             viewProjection: viewProj,
-            surferModelMatrix: surferDrawRange.isEmpty ? nil : draws[surferDrawRange.lowerBound].modelMatrix,
-            surferDrawCalls: surferDrawRange.count,
-            markerDrawCalls: markerDrawCount,
-            totalUniqueDraws: draws.count,
-            clampedDraws: draws.count > maxObjectsPerFrame
+            cpuFrameMs: Float((CACurrentMediaTime() - cpuFrameStart) * 1000),
+            gpuWaitMs: gpuWaitMs
         )
+        diagnosticsRecorder.record(diagnostics)
+        DebugMarkers.logFrameOnce(diagnostics)
 
         for i in 0..<objectDrawCount {
             var obj = ObjectUniforms()
@@ -1237,8 +1338,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     /// MTKView drawable pass must always clear — never inherit .load / undefined contents.
-    private func configureDrawablePass(_ rp: MTL4RenderPassDescriptor, clearColor: MTLClearColor) {
 #if !targetEnvironment(simulator)
+    private func configureDrawablePass(_ rp: MTL4RenderPassDescriptor, clearColor: MTLClearColor) {
         rp.colorAttachments[0].loadAction = .clear
         rp.colorAttachments[0].storeAction = .store
         rp.colorAttachments[0].clearColor = clearColor
@@ -1252,8 +1353,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             rp.stencilAttachment.clearStencil = 0
             rp.stencilAttachment.storeAction = .dontCare
         }
-#endif
     }
+#endif
 
     private func encodeBloomChain(time: Float) {
 #if !targetEnvironment(simulator)
