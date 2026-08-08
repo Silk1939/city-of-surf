@@ -6,9 +6,9 @@
 import simd
 
 enum ChaseCameraTuning {
-    static let eyeOffset = SIMD3<Float>(0, 3, -6)
+    static let eyeOffset = SIMD3<Float>(0, 4.5, -9.0)
     static let lookAheadDistance: Float = 12
-    static let lookTargetHeight: Float = 1.2
+    static let lookTargetHeight: Float = 2.0
     static let steeringLookOffset: Float = 2.5
     static let positionResponse: Float = 6
     static let lookResponse: Float = 8

@@ -16,10 +16,13 @@ final class GameState: ObservableObject {
     let wave = WaveField()
     var surfer = SurferController()
     var obstacles = ObstacleSystem()
+    var coins = CoinSystem()
 
     private(set) var time: Float = 0
     private(set) var runDistance: Float = 0
     private(set) var scrollZ: Float = 0
+    private(set) var coinScore: Int = 0
+    private(set) var pendingSplashPosition: SIMD3<Float>?
 
     private let baseSpeed: Float = 17
     private let maxSpeed: Float = 32
@@ -29,10 +32,13 @@ final class GameState: ObservableObject {
         runDistance = 0
         scrollZ = 0
         score = 0
+        coinScore = 0
+        pendingSplashPosition = nil
         speed = baseSpeed
         isGameOver = false
         surfer = SurferController()
         obstacles.reset()
+        coins.reset()
     }
 
     func steer(toWorldX x: Float) {
@@ -55,7 +61,6 @@ final class GameState: ObservableObject {
         speed = min(maxSpeed, baseSpeed + runDistance * 0.011)
         runDistance += speed * deltaTime
         scrollZ = 0
-        score = Int(runDistance)
 
         surfer.update(deltaTime: deltaTime, wave: wave, time: time, scrollZ: scrollZ)
         obstacles.update(
@@ -65,13 +70,27 @@ final class GameState: ObservableObject {
             time: time,
             scrollZ: scrollZ
         )
+        coinScore += coins.update(runDistance: runDistance, surfer: surfer)
+        score = Int(runDistance) + coinScore * 10
 
         if obstacles.hitsSurfer(surfer, runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ) {
             isGameOver = true
+            pendingSplashPosition = surfer.position
         }
     }
 
-    func fillFrameUniforms(_ frame: inout FrameUniforms, viewProjection: matrix_float4x4, cameraPosition: SIMD3<Float>) {
+    func consumeSplashPosition() -> SIMD3<Float>? {
+        defer { pendingSplashPosition = nil }
+        return pendingSplashPosition
+    }
+
+    func fillFrameUniforms(
+        _ frame: inout FrameUniforms,
+        viewProjection: matrix_float4x4,
+        cameraPosition: SIMD3<Float>,
+        cameraNear: Float,
+        cameraFar: Float
+    ) {
         frame.viewProjectionMatrix = viewProjection
         frame.lightDirection = ArtDirection.sunDirection
         frame.time = time
@@ -98,5 +117,23 @@ final class GameState: ObservableObject {
         frame.scrollZ = scrollZ
         frame.exposure = ArtDirection.exposure
         frame.cameraPosition = cameraPosition
+        frame.cameraNear = cameraNear
+        var dirAmp: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero, .zero)
+        var steepSpeed: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero, .zero)
+        wave.fillGerstnerUniforms(&dirAmp, &steepSpeed)
+        frame.gerstnerDirAmpWave0 = dirAmp.0
+        frame.gerstnerDirAmpWave1 = dirAmp.1
+        frame.gerstnerDirAmpWave2 = dirAmp.2
+        frame.gerstnerDirAmpWave3 = dirAmp.3
+        frame.gerstnerSteepSpeed0 = steepSpeed.0
+        frame.gerstnerSteepSpeed1 = steepSpeed.1
+        frame.gerstnerSteepSpeed2 = steepSpeed.2
+        frame.gerstnerSteepSpeed3 = steepSpeed.3
+        frame.cameraFar = cameraFar
+        frame.foamEdgeDepth = ArtDirection.Water.edgeFoamDepthMeters
+        frame.bloomThreshold = ArtDirection.bloomThreshold
+        frame.bloomIntensity = ArtDirection.bloomIntensity
+        frame.bloomBlurDirection = .zero
+        frame.bloomSoftKnee = ArtDirection.bloomSoftKnee
     }
 }
