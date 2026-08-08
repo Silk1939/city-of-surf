@@ -15,18 +15,17 @@ import simd
 
 struct WaveField {
     /// Tall flood crest — keep in sync with ChaseCamera eyeOffset / lookAhead.
-    var amplitude: Float = 8.0
+    var amplitude: Float = 7.0
     var faceWidth: Float = 14.0
     var speed: Float = 16.0
-    /// 0.6 = soft rolling front, 0.9 = steep face, 1.1+ = plunging lip.
-    var steepness: Float = 1.02
+    /// Soft enough that the face reads as a slope, not a camera-eating wall.
+    var steepness: Float = 0.78
     var direction: SIMD2<Float> = SIMD2(0, 1)
-    /// Visible travelling chop on the face (was 0.12 — too flat).
-    var rippleAmplitude: Float = 0.62
+    /// Visible travelling chop on the face.
+    var rippleAmplitude: Float = 0.48
     var rippleLength: Float = 5.5
-    /// Puts surfer (world z≈0) on the front face; crest rises behind (~faceWidth*0.28).
-    /// Folded into `frame.scrollZ` on the GPU (see GameState).
-    var crestShift: Float = 4.2
+    /// Surfer on the front face; crest rises behind — keep eyeOffset.z behind this.
+    var crestShift: Float = 3.4
 
     var wavelength: Float {
         get { faceWidth }

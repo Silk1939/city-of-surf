@@ -676,11 +676,13 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     water *= edgeShade * (0.38 + 0.42 * ndotl + 0.28 * (N.y * 0.5 + 0.5));
 
     // Procedural sky reflection — tone down before mixing.
+    // Grazing angles used to milk-out the whole face into grey/white.
     float3 R = reflect(-V, N);
     float3 skyCol = evaluateProceduralSky(R, frame.lightDirection, frame.lightColor, frame.sunIntensity);
-    skyCol = min(skyCol, float3(2.2));
+    skyCol = min(skyCol, float3(1.6));
     float sunSpot = pow(saturate(dot(R, L)), 280.0);
-    water = mix(water, skyCol * 0.85, fresnel * 0.85);
+    float faceFresnel = fresnel * smoothstep(0.08, 0.45, NdotV);
+    water = mix(water, skyCol * 0.75, faceFresnel * 0.7);
 
     // Subsurface scattering: crest glows turquoise when backlit (ArtDirection.crestSSSIntensity≈1.05).
     float sss = pow(saturate(dot(V, -L) * 0.5 + 0.5), 2.5) * pow(h, 2.0);

@@ -1016,9 +1016,19 @@ final class Renderer: NSObject, MTKViewDelegate {
             time: state.time,
             scrollZ: state.scrollZ
         )
+        // Sample water under the chase eye so we never bury the camera in the crest.
+        let eyeZ = state.surfer.position.z + camera.eyeOffset.z
+        let eyeX = state.surfer.position.x + state.surfer.lean * 1.35
+        let eyeWaterY = state.wave.height(
+            x: eyeX,
+            z: eyeZ,
+            time: state.time,
+            scrollZ: state.scrollZ
+        )
         camera.update(
             follow: state.surfer.position,
             waveHeight: waveY,
+            eyeWaterHeight: eyeWaterY,
             lean: state.surfer.lean,
             shake: state.wipeoutShake,
             speed: state.speed,
