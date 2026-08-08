@@ -6,33 +6,91 @@
 //
 
 import XCTest
+import Metal
+import simd
 @testable import city_of_surf
 
 final class city_of_surfTests: XCTestCase {
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+    func testChaseCameraSnapsToBoardRelativeTuning() {
+        var camera = ChaseCamera()
+        let boardPosition = SIMD3<Float>(1, 2, 3)
+
+        camera.update(
+            follow: boardPosition,
+            steering: 0.5,
+            speed: ChaseCameraTuning.baseSpeed,
+            deltaTime: 1 / 60
+        )
+
+        XCTAssertEqual(
+            camera.smoothEye,
+            boardPosition + ChaseCameraTuning.eyeOffset
+        )
+        XCTAssertEqual(
+            camera.smoothLookTarget,
+            boardPosition + SIMD3<Float>(
+                0.5 * ChaseCameraTuning.steeringLookOffset,
+                ChaseCameraTuning.lookTargetHeight,
+                ChaseCameraTuning.lookAheadDistance
+            )
+        )
+        XCTAssertEqual(camera.smoothFovDegrees, ChaseCameraTuning.baseFovDegrees)
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    func testChaseCameraSmoothingIsFrameRateIndependent() {
+        var singleStep = ChaseCamera()
+        var doubleStep = ChaseCamera()
+        let origin = SIMD3<Float>.zero
+        let destination = SIMD3<Float>(4, 2, 8)
+
+        singleStep.update(follow: origin, steering: 0, speed: 17, deltaTime: 0)
+        doubleStep.update(follow: origin, steering: 0, speed: 17, deltaTime: 0)
+        singleStep.update(follow: destination, steering: 0.8, speed: 32, deltaTime: 1 / 30)
+        doubleStep.update(follow: destination, steering: 0.8, speed: 32, deltaTime: 1 / 60)
+        doubleStep.update(follow: destination, steering: 0.8, speed: 32, deltaTime: 1 / 60)
+
+        XCTAssertLessThan(simd_distance(singleStep.smoothEye, doubleStep.smoothEye), 0.0001)
+        XCTAssertLessThan(
+            simd_distance(singleStep.smoothLookTarget, doubleStep.smoothLookTarget),
+            0.0001
+        )
+        XCTAssertEqual(
+            singleStep.smoothFovDegrees,
+            doubleStep.smoothFovDegrees,
+            accuracy: 0.0001
+        )
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-        // XCTest Documentation
-        // https://developer.apple.com/documentation/xctest
+    func testLightingUsesLowWarmSunCoolSkyAndExponentialFog() {
+        XCTAssertGreaterThan(ArtDirection.sunDirection.y, 0)
+        XCTAssertLessThan(ArtDirection.sunDirection.y, 0.35)
+        XCTAssertGreaterThan(ArtDirection.sunColor.x, ArtDirection.sunColor.z)
+        XCTAssertGreaterThan(
+            ArtDirection.skyAmbientColor.z,
+            ArtDirection.skyAmbientColor.x
+        )
+
+        let nearFog = ArtDirection.exponentialFogFactor(distance: 20)
+        let farFog = ArtDirection.exponentialFogFactor(distance: 120)
+        XCTAssertGreaterThan(nearFog, 0)
+        XCTAssertGreaterThan(farFog, nearFog)
+        XCTAssertLessThan(farFog, 1)
     }
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
-        }
+    func testHDRTargetAndACESTonemapStayInDisplayRange() {
+        XCTAssertEqual(RenderTargetFormat.hdrScene, .rgba16Float)
+        XCTAssertEqual(RenderTargetFormat.display, .bgra8Unorm)
+
+        let black = ArtDirection.acesTonemapped(.zero)
+        let mid = ArtDirection.acesTonemapped(SIMD3<Float>(repeating: 1))
+        let bright = ArtDirection.acesTonemapped(SIMD3<Float>(repeating: 16))
+
+        XCTAssertEqual(black, .zero)
+        XCTAssertGreaterThan(bright.x, mid.x)
+        XCTAssertLessThanOrEqual(bright.x, 1)
+        XCTAssertLessThanOrEqual(bright.y, 1)
+        XCTAssertLessThanOrEqual(bright.z, 1)
     }
 
 }

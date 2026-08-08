@@ -40,6 +40,9 @@ typedef struct
     matrix_float4x4 viewProjectionMatrix;
     simd_float3 lightDirection;
     float time;
+    simd_float4 sunColorIntensity;
+    simd_float4 skyAmbientColorIntensity;
+    simd_float4 fogColorDensity;
     float waveAmplitude;
     float waveLength;
     float waveSpeed;
@@ -49,7 +52,7 @@ typedef struct
     float rippleAmplitude;
     float rippleLength;
     float scrollZ;
-    float _pad0;
+    float exposure;
     simd_float3 cameraPosition;
     float _pad1;
 } FrameUniforms;

@@ -73,8 +73,20 @@ final class GameState: ObservableObject {
 
     func fillFrameUniforms(_ frame: inout FrameUniforms, viewProjection: matrix_float4x4, cameraPosition: SIMD3<Float>) {
         frame.viewProjectionMatrix = viewProjection
-        frame.lightDirection = simd_normalize(SIMD3<Float>(0.45, 0.78, 0.35))
+        frame.lightDirection = ArtDirection.sunDirection
         frame.time = time
+        frame.sunColorIntensity = SIMD4<Float>(
+            ArtDirection.sunColor,
+            ArtDirection.sunIntensity
+        )
+        frame.skyAmbientColorIntensity = SIMD4<Float>(
+            ArtDirection.skyAmbientColor,
+            ArtDirection.skyAmbientIntensity
+        )
+        frame.fogColorDensity = SIMD4<Float>(
+            ArtDirection.fogColor,
+            ArtDirection.fogDensity
+        )
         frame.waveAmplitude = wave.amplitude
         frame.waveLength = wave.wavelength
         frame.waveSpeed = wave.speed
@@ -84,6 +96,7 @@ final class GameState: ObservableObject {
         frame.rippleAmplitude = wave.rippleAmplitude
         frame.rippleLength = wave.rippleLength
         frame.scrollZ = scrollZ
+        frame.exposure = ArtDirection.exposure
         frame.cameraPosition = cameraPosition
     }
 }

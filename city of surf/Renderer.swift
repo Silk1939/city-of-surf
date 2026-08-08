@@ -12,6 +12,11 @@ import QuartzCore
 let maxBuffersInFlight = 3
 let maxObjectsPerFrame = 128
 
+enum RenderTargetFormat {
+    static let hdrScene: MTLPixelFormat = .rgba16Float
+    static let display: MTLPixelFormat = .bgra8Unorm
+}
+
 nonisolated enum RendererError: Error {
     case badVertexDescriptor
     case pipeline
@@ -46,7 +51,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var objectUniformBuffer: MTLBuffer
     var solidPipeline: MTLRenderPipelineState
     var wavePipeline: MTLRenderPipelineState
+    var postPipeline: MTLRenderPipelineState
     var depthState: MTLDepthStencilState
+    var sceneColorTexture: MTLTexture?
 
     var uniformBufferIndex = 0
     var objectDrawCount = 0
@@ -95,17 +102,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         objectUniformBuffer.label = "ObjectUniforms"
 
         metalKitView.depthStencilPixelFormat = .depth32Float_stencil8
-        metalKitView.colorPixelFormat = .bgra8Unorm_srgb
+        metalKitView.colorPixelFormat = RenderTargetFormat.display
         metalKitView.sampleCount = 1
-        // Dusk canyon sky
-        metalKitView.clearColor = MTLClearColor(red: 0.28, green: 0.36, blue: 0.48, alpha: 1)
+        metalKitView.clearColor = MTLClearColor(
+            red: Double(ArtDirection.fogColor.x),
+            green: Double(ArtDirection.fogColor.y),
+            blue: Double(ArtDirection.fogColor.z),
+            alpha: 1
+        )
 
         let vd = Self.buildMetalVertexDescriptor()
 
         do {
             solidPipeline = try Self.buildPipeline(
                 device: device,
-                metalKitView: metalKitView,
+                sampleCount: metalKitView.sampleCount,
+                colorPixelFormat: RenderTargetFormat.hdrScene,
                 vertexDescriptor: vd,
                 vertex: "solidVertex",
                 fragment: "solidFragment",
@@ -113,11 +125,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             )
             wavePipeline = try Self.buildPipeline(
                 device: device,
-                metalKitView: metalKitView,
+                sampleCount: metalKitView.sampleCount,
+                colorPixelFormat: RenderTargetFormat.hdrScene,
                 vertexDescriptor: vd,
                 vertex: "waveVertex",
                 fragment: "waveFragment",
                 label: "Wave"
+            )
+            postPipeline = try Self.buildPipeline(
+                device: device,
+                sampleCount: metalKitView.sampleCount,
+                colorPixelFormat: RenderTargetFormat.display,
+                vertexDescriptor: nil,
+                vertex: "fullscreenVertex",
+                fragment: "tonemapFragment",
+                label: "ACES Tonemap"
             )
         } catch {
             print("Pipeline error: \(error)")
@@ -196,8 +218,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     @MainActor
     class func buildPipeline(
         device: MTLDevice,
-        metalKitView: MTKView,
-        vertexDescriptor: MTLVertexDescriptor,
+        sampleCount: Int,
+        colorPixelFormat: MTLPixelFormat,
+        vertexDescriptor: MTLVertexDescriptor?,
         vertex: String,
         fragment: String,
         label: String
@@ -214,11 +237,11 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let pipelineDescriptor = MTL4RenderPipelineDescriptor()
         pipelineDescriptor.label = label
-        pipelineDescriptor.rasterSampleCount = metalKitView.sampleCount
+        pipelineDescriptor.rasterSampleCount = sampleCount
         pipelineDescriptor.vertexFunctionDescriptor = vDesc
         pipelineDescriptor.fragmentFunctionDescriptor = fDesc
         pipelineDescriptor.vertexDescriptor = vertexDescriptor
-        pipelineDescriptor.colorAttachments[0].pixelFormat = metalKitView.colorPixelFormat
+        pipelineDescriptor.colorAttachments[0].pixelFormat = colorPixelFormat
 
         return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
@@ -364,13 +387,25 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let state = gameState else { return }
         guard let drawable = view.currentDrawable else { return }
         guard let renderPassDescriptor = view.currentMTL4RenderPassDescriptor else { return }
+        if sceneColorTexture?.width != Int(view.drawableSize.width)
+            || sceneColorTexture?.height != Int(view.drawableSize.height) {
+            rebuildSceneColorTexture(size: view.drawableSize)
+        }
+        guard let sceneColorTexture else { return }
 
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTime, 1.0 / 20.0))
         lastTime = now
 
         state.update(deltaTime: dt)
-        camera.update(follow: state.surfer.position, lean: state.surfer.lean, deltaTime: dt)
+        let boardPosition = state.surfer.position
+            - SIMD3<Float>(0, state.surfer.currentHeight * 0.5, 0)
+        camera.update(
+            follow: boardPosition,
+            steering: state.surfer.lean,
+            speed: state.speed,
+            deltaTime: dt
+        )
 
         let previousValueToWaitFor = frameIndex - maxBuffersInFlight
         endFrameEvent.wait(untilSignaledValue: UInt64(previousValueToWaitFor), timeoutMS: 10)
@@ -380,7 +415,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         commandAllocator.reset()
         commandBuffer.beginCommandBuffer(allocator: commandAllocator)
 
-        let viewM = camera.viewMatrix(follow: state.surfer.position)
+        let viewM = camera.viewMatrix()
         let projM = camera.projectionMatrix(aspect: aspect)
         var frame = FrameUniforms()
         state.fillFrameUniforms(&frame, viewProjection: projM * viewM, cameraPosition: camera.smoothEye)
@@ -397,11 +432,19 @@ final class Renderer: NSObject, MTKViewDelegate {
             objectUniformsPointer(slot: i).pointee = obj
         }
 
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+        guard let scenePassDescriptor = renderPassDescriptor.copy() as? MTL4RenderPassDescriptor else {
+            fatalError("Failed to copy render pass descriptor")
+        }
+        scenePassDescriptor.colorAttachments[0].texture = sceneColorTexture
+        scenePassDescriptor.colorAttachments[0].loadAction = .clear
+        scenePassDescriptor.colorAttachments[0].storeAction = .store
+        scenePassDescriptor.colorAttachments[0].clearColor = view.clearColor
+
+        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: scenePassDescriptor) else {
             fatalError("Failed to create render command encoder")
         }
 
-        renderEncoder.label = "FloodSurfer"
+        renderEncoder.label = "FloodSurfer Scene"
         renderEncoder.setCullMode(.back)
         renderEncoder.setFrontFacing(.counterClockwise)
         renderEncoder.setDepthStencilState(depthState)
@@ -440,6 +483,29 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         renderEncoder.endEncoding()
+
+        guard let postEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            fatalError("Failed to create post-process encoder")
+        }
+        postEncoder.label = "FloodSurfer ACES Tonemap"
+        postEncoder.setCullMode(.none)
+        postEncoder.setRenderPipelineState(postPipeline)
+        postEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+        fragmentArgumentTable.setAddress(
+            frameUniformsGPUAddress(),
+            index: BufferIndex.frameUniforms.rawValue
+        )
+        fragmentArgumentTable.setTexture(
+            sceneColorTexture.gpuResourceID,
+            index: TextureIndex.color.rawValue
+        )
+        postEncoder.drawPrimitives(
+            primitiveType: .triangle,
+            vertexStart: 0,
+            vertexCount: 3
+        )
+        postEncoder.endEncoding()
+
         commandBuffer.useResidencySet((view.layer as! CAMetalLayer).residencySet)
         commandBuffer.endCommandBuffer()
 
@@ -454,7 +520,41 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         aspect = Float(size.width / max(size.height, 1))
+#if !targetEnvironment(simulator)
+        rebuildSceneColorTexture(size: size)
+#endif
     }
+
+#if !targetEnvironment(simulator)
+    private func rebuildSceneColorTexture(size: CGSize) {
+        let width = max(Int(size.width), 1)
+        let height = max(Int(size.height), 1)
+        if sceneColorTexture?.width == width, sceneColorTexture?.height == height {
+            return
+        }
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: RenderTargetFormat.hdrScene,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.storageMode = .private
+        descriptor.usage = [.renderTarget, .shaderRead]
+        guard let newTexture = device.makeTexture(descriptor: descriptor) else {
+            sceneColorTexture = nil
+            return
+        }
+        newTexture.label = "HDR Scene Color"
+
+        if let sceneColorTexture {
+            residencySet.removeAllocation(sceneColorTexture)
+        }
+        residencySet.addAllocation(newTexture)
+        residencySet.commit()
+        sceneColorTexture = newTexture
+    }
+#endif
 }
 
 func alignedSize(_ size: Int) -> Int {
