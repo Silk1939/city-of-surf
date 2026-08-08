@@ -432,3 +432,125 @@ fragment float4 tonemapFragment(
     float3 gammaCorrected = pow(mapped, float3(1.0 / 2.2));
     return float4(gammaCorrected, 1.0);
 }
+
+// MARK: - GPU Particles
+
+static float particle_hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return float(x) * (1.0 / 4294967295.0);
+}
+
+static float3 particle_rand_dir(uint seed)
+{
+    float a = particle_hash(seed) * 6.2831853;
+    float b = particle_hash(seed + 17u) * 2.0 - 1.0;
+    float r = sqrt(max(1.0 - b * b, 0.0));
+    return float3(cos(a) * r, abs(b), sin(a) * r);
+}
+
+kernel void particleUpdate(
+    device Particle *particles [[buffer(BufferIndexParticles)]],
+    constant ParticleFrameUniforms &frame [[buffer(BufferIndexParticleFrame)]],
+    uint id [[thread_position_in_grid]])
+{
+    uint count = uint(frame.particleCount);
+    if (id >= count) return;
+
+    Particle p = particles[id];
+    if (p.life > 0.0) {
+        p.life -= frame.deltaTime;
+        p.velocity.y -= frame.gravity * frame.deltaTime;
+        p.velocity *= max(0.0, 1.0 - frame.drag * frame.deltaTime);
+        p.position += p.velocity * frame.deltaTime;
+        p.color.a *= saturate(p.life * 2.0);
+        if (p.life <= 0.0) {
+            p.life = 0.0;
+            p.size = 0.0;
+        }
+        particles[id] = p;
+        return;
+    }
+
+    // Dead slots may be recycled for new emitters.
+    float boardChance = frame.emitBoardCount / max(frame.particleCount, 1.0);
+    float crestChance = frame.emitCrestCount / max(frame.particleCount, 1.0);
+    float splashChance = frame.emitSplashCount / max(frame.particleCount, 1.0);
+    float roll = particle_hash(id + frame.seed);
+
+    if (roll < boardChance) {
+        float3 dir = particle_rand_dir(id * 3u + frame.seed);
+        p.position = frame.emitBoardPosition + float3(dir.x, 0.05, -0.4 - abs(dir.z) * 0.3) * 0.35;
+        p.velocity = float3(dir.x * 1.2, 1.5 + dir.y * 1.8, -2.5 - dir.z * 1.5);
+        p.life = frame.sprayLife * (0.7 + particle_hash(id + 9u) * 0.6);
+        p.size = frame.spraySize;
+        p.color = frame.sprayColor;
+        particles[id] = p;
+    } else if (roll < boardChance + crestChance) {
+        float3 dir = particle_rand_dir(id * 5u + frame.seed);
+        p.position = frame.emitCrestPosition + float3(dir.x, dir.y, dir.z) * 0.8;
+        p.velocity = float3(dir.x * 1.4, 2.2 + dir.y * 2.0, dir.z * 1.1);
+        p.life = frame.sprayLife * (0.8 + particle_hash(id + 11u) * 0.5);
+        p.size = frame.spraySize * 1.15;
+        p.color = frame.sprayColor;
+        particles[id] = p;
+    } else if (roll < boardChance + crestChance + splashChance) {
+        float3 dir = particle_rand_dir(id * 7u + frame.seed);
+        p.position = frame.emitSplashPosition + dir * 0.25;
+        p.velocity = dir * (3.5 + particle_hash(id + 13u) * 3.0);
+        p.velocity.y = abs(p.velocity.y) + 2.0;
+        p.life = frame.splashLife * (0.7 + particle_hash(id + 15u) * 0.6);
+        p.size = frame.splashSize;
+        p.color = frame.splashColor;
+        particles[id] = p;
+    }
+}
+
+typedef struct
+{
+    float4 position [[position]];
+    float2 uv;
+    float4 color;
+} ParticleVOut;
+
+vertex ParticleVOut particleVertex(
+    uint vertexID [[vertex_id]],
+    uint instanceID [[instance_id]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    const device Particle *particles [[buffer(BufferIndexParticles)]])
+{
+    Particle p = particles[instanceID];
+    float2 corners[6] = {
+        float2(-1, -1), float2(1, -1), float2(-1, 1),
+        float2(-1, 1), float2(1, -1), float2(1, 1)
+    };
+    float2 corner = corners[vertexID];
+    float3 toCam = normalize(frame.cameraPosition - p.position);
+    float3 worldUp = float3(0, 1, 0);
+    float3 right = normalize(cross(worldUp, toCam));
+    if (length(right) < 1e-3) {
+        right = float3(1, 0, 0);
+    }
+    float3 up = cross(toCam, right);
+    float3 world = p.position + (right * corner.x + up * corner.y) * p.size * step(0.0, p.life);
+
+    ParticleVOut out;
+    out.position = frame.viewProjectionMatrix * float4(world, 1.0);
+    out.uv = corner * 0.5 + 0.5;
+    out.color = p.color;
+    out.color.a *= step(0.0, p.life);
+    return out;
+}
+
+fragment float4 particleFragment(ParticleVOut in [[stage_in]])
+{
+    float2 d = in.uv * 2.0 - 1.0;
+    float alpha = saturate(1.0 - dot(d, d));
+    alpha = pow(alpha, 1.4) * in.color.a;
+    if (alpha < 0.02) discard_fragment();
+    return float4(in.color.rgb, alpha);
+}

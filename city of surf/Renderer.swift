@@ -56,11 +56,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     var bloomExtractPipeline: MTLRenderPipelineState
     var bloomBlurHPipeline: MTLRenderPipelineState
     var bloomBlurVPipeline: MTLRenderPipelineState
+    var particlePipeline: MTLRenderPipelineState
     var depthState: MTLDepthStencilState
+    var particleDepthState: MTLDepthStencilState
     var sceneColorTexture: MTLTexture?
     var sceneDepthTexture: MTLTexture?
     var bloomTexture: MTLTexture?
     var bloomTempTexture: MTLTexture?
+    let particles: ParticleSystem
 
     var uniformBufferIndex = 0
     var objectDrawCount = 0
@@ -92,7 +95,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.commandAllocators = (0...maxBuffersInFlight).map { _ in device.makeCommandAllocator()! }
 
         let argTableDesc = MTL4ArgumentTableDescriptor()
-        argTableDesc.maxBufferBindCount = 4
+        argTableDesc.maxBufferBindCount = 6
         self.vertexArgumentTable = try! device.makeArgumentTable(descriptor: argTableDesc)
         argTableDesc.maxTextureBindCount = 3
         self.fragmentArgumentTable = try! device.makeArgumentTable(descriptor: argTableDesc)
@@ -179,6 +182,11 @@ final class Renderer: NSObject, MTKViewDelegate {
                 fragment: "bloomBlurVFragment",
                 label: "Bloom Blur V"
             )
+            particlePipeline = try Self.buildParticlePipeline(
+                device: device,
+                sampleCount: metalKitView.sampleCount,
+                colorPixelFormat: RenderTargetFormat.hdrScene
+            )
         } catch {
             print("Pipeline error: \(error)")
             return nil
@@ -189,6 +197,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         depthDesc.isDepthWriteEnabled = true
         guard let ds = device.makeDepthStencilState(descriptor: depthDesc) else { return nil }
         depthState = ds
+
+        let particleDepthDesc = MTLDepthStencilDescriptor()
+        particleDepthDesc.depthCompareFunction = .less
+        particleDepthDesc.isDepthWriteEnabled = false
+        guard let pds = device.makeDepthStencilState(descriptor: particleDepthDesc) else { return nil }
+        particleDepthState = pds
+
+        guard let particleSystem = ParticleSystem(device: device) else { return nil }
+        particles = particleSystem
 
         do {
             unitBox = try MeshFactory.makeBox(
@@ -205,9 +222,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 segmentsZ: 180,
                 vertexDescriptor: vd
             )
-            boardMesh = try MeshFactory.makeBoard(device: device, vertexDescriptor: vd)
-            coinMesh = try MeshFactory.makeCoin(device: device, vertexDescriptor: vd)
-            proceduralSurfer = try ProceduralSurferMeshes.make(device: device, vertexDescriptor: vd)
+            let library = try AssetMeshLibrary(device: device, vertexDescriptor: vd)
+            assetLibrary = library
+            boardMesh = library.mesh(for: .board)
+            coinMesh = library.mesh(for: .coin)
+            obstacleMesh = library.mesh(for: .obstacleCab)
+            proceduralSurfer = library.proceduralSurfer
         } catch {
             print("Mesh error: \(error)")
             return nil
@@ -216,8 +236,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         let residencyDesc = MTLResidencySetDescriptor()
         residencyDesc.initialCapacity = 64
         let rs = try! device.makeResidencySet(descriptor: residencyDesc)
-        rs.addAllocations([frameUniformBuffer, objectUniformBuffer])
-        let meshSet = [unitBox, waveMesh, boardMesh, coinMesh, proceduralSurfer.torso, proceduralSurfer.head, proceduralSurfer.limb]
+        rs.addAllocations([frameUniformBuffer, objectUniformBuffer, particles.particleBuffer])
+        var meshSet = [unitBox, waveMesh, boardMesh, coinMesh, obstacleMesh]
+        meshSet.append(contentsOf: assetLibrary.allResidentMeshes)
         for mesh in meshSet {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
             rs.addAllocations(mesh.submeshes.map(\.indexBuffer.buffer))
@@ -282,6 +303,36 @@ final class Renderer: NSObject, MTKViewDelegate {
             pipelineDescriptor.colorAttachments[index].pixelFormat = format
         }
 
+        return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
+    }
+
+    class func buildParticlePipeline(
+        device: MTLDevice,
+        sampleCount: Int,
+        colorPixelFormat: MTLPixelFormat
+    ) throws -> MTLRenderPipelineState {
+        let library = device.makeDefaultLibrary()
+        let compiler = try device.makeCompiler(descriptor: MTL4CompilerDescriptor())
+
+        let vDesc = MTL4LibraryFunctionDescriptor()
+        vDesc.library = library
+        vDesc.name = "particleVertex"
+        let fDesc = MTL4LibraryFunctionDescriptor()
+        fDesc.library = library
+        fDesc.name = "particleFragment"
+
+        let pipelineDescriptor = MTL4RenderPipelineDescriptor()
+        pipelineDescriptor.label = "Particles"
+        pipelineDescriptor.rasterSampleCount = sampleCount
+        pipelineDescriptor.vertexFunctionDescriptor = vDesc
+        pipelineDescriptor.fragmentFunctionDescriptor = fDesc
+        pipelineDescriptor.colorAttachments[0].pixelFormat = colorPixelFormat
+        // Soft spray over the HDR scene.
+        pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
+        pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        pipelineDescriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
 #endif
@@ -425,7 +476,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             let rot = Math.rotation(radians: o.roll * 0.35, axis: SIMD3(0, 0, 1))
             let model = Math.translation(pos) * rot * Math.scale(o.size)
             items.append(DrawItem(
-                mesh: unitBox,
+                mesh: obstacleMesh,
                 modelMatrix: model,
                 color: SIMD4(0.95, 0.78, 0.12, 1),
                 isWave: false,
@@ -581,6 +632,30 @@ final class Renderer: NSObject, MTKViewDelegate {
         for i in 0..<objectDrawCount where draws[i].isWave {
             drawItem(draws[i], slot: i, encoder: waveEncoder)
         }
+
+        // Board spray + crest mist + optional splash, rendered into HDR before bloom.
+        var emit = ParticleEmitRequest()
+        let boardPos = boardPosition
+        emit.boardPosition = boardPos
+        emit.boardCount = ArtDirection.Particles.boardSprayRate * dt
+        emit.crestPosition = SIMD3(boardPos.x, state.wave.amplitude * 0.75, 4)
+        emit.crestCount = ArtDirection.Particles.crestSprayRate * dt
+        if let splashPos = state.consumeSplashPosition() {
+            particles.triggerSplash(at: splashPos)
+        }
+        particles.update(deltaTime: dt, emit: emit)
+
+        waveEncoder.setRenderPipelineState(particlePipeline)
+        waveEncoder.setDepthStencilState(particleDepthState)
+        waveEncoder.setCullMode(.none)
+        vertexArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
+        vertexArgumentTable.setAddress(particles.particleBuffer.gpuAddress, index: BufferIndex.particles.rawValue)
+        waveEncoder.drawPrimitives(
+            primitiveType: .triangle,
+            vertexStart: 0,
+            vertexCount: 6,
+            instanceCount: particles.maxParticles
+        )
         waveEncoder.endEncoding()
 
         func encodeFullscreen(

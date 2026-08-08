@@ -106,4 +106,11 @@ final class city_of_surfTests: XCTestCase {
         XCTAssertLessThanOrEqual(bright.z, 1)
     }
 
+    func testAssetMeshKeysPreferStableFilenames() {
+        XCTAssertEqual(AssetMeshKey.surfer.preferredFilenames.first, "surfer.usdz")
+        XCTAssertEqual(AssetMeshKey.board.preferredFilenames.first, "board.usdz")
+        XCTAssertEqual(AssetMeshKey.coin.preferredFilenames.first, "coin.usdz")
+        XCTAssertTrue(AssetMeshKey.obstacleCab.preferredFilenames.contains("obstacle_cab.glb"))
+    }
+
 }

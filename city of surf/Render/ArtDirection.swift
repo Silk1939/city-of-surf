@@ -28,6 +28,21 @@ enum ArtDirection {
     static let bloomIntensity: Float = 0.55
     static let bloomSoftKnee: Float = 0.45
 
+    enum Particles {
+        static let maxCount: Int = 2048
+        static let boardSprayRate: Float = 48
+        static let crestSprayRate: Float = 36
+        static let splashBurst: Int = 64
+        static let gravity: Float = 6.5
+        static let drag: Float = 1.8
+        static let sprayLife: Float = 0.55
+        static let splashLife: Float = 0.85
+        static let spraySize: Float = 0.18
+        static let splashSize: Float = 0.28
+        static let sprayColor = SIMD4<Float>(0.85, 0.93, 1.0, 0.65)
+        static let splashColor = SIMD4<Float>(0.95, 0.98, 1.0, 0.85)
+    }
+
     enum Water {
         static let deepColor = SIMD3<Float>(0.01, 0.08, 0.18)
         static let midColor = SIMD3<Float>(0.04, 0.32, 0.46)

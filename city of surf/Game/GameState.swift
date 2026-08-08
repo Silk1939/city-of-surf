@@ -22,6 +22,7 @@ final class GameState: ObservableObject {
     private(set) var runDistance: Float = 0
     private(set) var scrollZ: Float = 0
     private(set) var coinScore: Int = 0
+    private(set) var pendingSplashPosition: SIMD3<Float>?
 
     private let baseSpeed: Float = 17
     private let maxSpeed: Float = 32
@@ -32,6 +33,7 @@ final class GameState: ObservableObject {
         scrollZ = 0
         score = 0
         coinScore = 0
+        pendingSplashPosition = nil
         speed = baseSpeed
         isGameOver = false
         surfer = SurferController()
@@ -73,7 +75,13 @@ final class GameState: ObservableObject {
 
         if obstacles.hitsSurfer(surfer, runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ) {
             isGameOver = true
+            pendingSplashPosition = surfer.position
         }
+    }
+
+    func consumeSplashPosition() -> SIMD3<Float>? {
+        defer { pendingSplashPosition = nil }
+        return pendingSplashPosition
     }
 
     func fillFrameUniforms(
