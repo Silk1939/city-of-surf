@@ -71,7 +71,13 @@ final class GameState: ObservableObject {
         }
     }
 
-    func fillFrameUniforms(_ frame: inout FrameUniforms, viewProjection: matrix_float4x4, cameraPosition: SIMD3<Float>) {
+    func fillFrameUniforms(
+        _ frame: inout FrameUniforms,
+        viewProjection: matrix_float4x4,
+        cameraPosition: SIMD3<Float>,
+        cameraNear: Float,
+        cameraFar: Float
+    ) {
         frame.viewProjectionMatrix = viewProjection
         frame.lightDirection = ArtDirection.sunDirection
         frame.time = time
@@ -98,5 +104,21 @@ final class GameState: ObservableObject {
         frame.scrollZ = scrollZ
         frame.exposure = ArtDirection.exposure
         frame.cameraPosition = cameraPosition
+        frame.cameraNear = cameraNear
+        var dirAmp: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero, .zero)
+        var steepSpeed: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero, .zero)
+        wave.fillGerstnerUniforms(&dirAmp, &steepSpeed)
+        frame.gerstnerDirAmpWave0 = dirAmp.0
+        frame.gerstnerDirAmpWave1 = dirAmp.1
+        frame.gerstnerDirAmpWave2 = dirAmp.2
+        frame.gerstnerDirAmpWave3 = dirAmp.3
+        frame.gerstnerSteepSpeed0 = steepSpeed.0
+        frame.gerstnerSteepSpeed1 = steepSpeed.1
+        frame.gerstnerSteepSpeed2 = steepSpeed.2
+        frame.gerstnerSteepSpeed3 = steepSpeed.3
+        frame.cameraFar = cameraFar
+        frame.foamEdgeDepth = ArtDirection.Water.edgeFoamDepthMeters
+        frame.bloomThreshold = ArtDirection.bloomThreshold
+        frame.bloomIntensity = ArtDirection.bloomIntensity
     }
 }

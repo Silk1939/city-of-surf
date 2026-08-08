@@ -15,6 +15,7 @@ let maxObjectsPerFrame = 128
 enum RenderTargetFormat {
     static let hdrScene: MTLPixelFormat = .rgba16Float
     static let display: MTLPixelFormat = .bgra8Unorm
+    static let linearDepth: MTLPixelFormat = .r32Float
 }
 
 nonisolated enum RendererError: Error {
@@ -54,6 +55,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var postPipeline: MTLRenderPipelineState
     var depthState: MTLDepthStencilState
     var sceneColorTexture: MTLTexture?
+    var sceneDepthTexture: MTLTexture?
 
     var uniformBufferIndex = 0
     var objectDrawCount = 0
@@ -83,7 +85,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let argTableDesc = MTL4ArgumentTableDescriptor()
         argTableDesc.maxBufferBindCount = 4
         self.vertexArgumentTable = try! device.makeArgumentTable(descriptor: argTableDesc)
-        argTableDesc.maxTextureBindCount = 1
+        argTableDesc.maxTextureBindCount = 3
         self.fragmentArgumentTable = try! device.makeArgumentTable(descriptor: argTableDesc)
 
         self.endFrameEvent = device.makeSharedEvent()!
@@ -117,7 +119,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             solidPipeline = try Self.buildPipeline(
                 device: device,
                 sampleCount: metalKitView.sampleCount,
-                colorPixelFormat: RenderTargetFormat.hdrScene,
+                colorPixelFormats: [RenderTargetFormat.hdrScene, RenderTargetFormat.linearDepth],
                 vertexDescriptor: vd,
                 vertex: "solidVertex",
                 fragment: "solidFragment",
@@ -126,7 +128,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             wavePipeline = try Self.buildPipeline(
                 device: device,
                 sampleCount: metalKitView.sampleCount,
-                colorPixelFormat: RenderTargetFormat.hdrScene,
+                colorPixelFormats: [RenderTargetFormat.hdrScene],
                 vertexDescriptor: vd,
                 vertex: "waveVertex",
                 fragment: "waveFragment",
@@ -135,7 +137,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             postPipeline = try Self.buildPipeline(
                 device: device,
                 sampleCount: metalKitView.sampleCount,
-                colorPixelFormat: RenderTargetFormat.display,
+                colorPixelFormats: [RenderTargetFormat.display],
                 vertexDescriptor: nil,
                 vertex: "fullscreenVertex",
                 fragment: "tonemapFragment",
@@ -219,7 +221,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     class func buildPipeline(
         device: MTLDevice,
         sampleCount: Int,
-        colorPixelFormat: MTLPixelFormat,
+        colorPixelFormats: [MTLPixelFormat],
         vertexDescriptor: MTLVertexDescriptor?,
         vertex: String,
         fragment: String,
@@ -241,7 +243,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         pipelineDescriptor.vertexFunctionDescriptor = vDesc
         pipelineDescriptor.fragmentFunctionDescriptor = fDesc
         pipelineDescriptor.vertexDescriptor = vertexDescriptor
-        pipelineDescriptor.colorAttachments[0].pixelFormat = colorPixelFormat
+        for (index, format) in colorPixelFormats.enumerated() {
+            pipelineDescriptor.colorAttachments[index].pixelFormat = format
+        }
 
         return try compiler.makeRenderPipelineState(descriptor: pipelineDescriptor)
     }
@@ -389,9 +393,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let renderPassDescriptor = view.currentMTL4RenderPassDescriptor else { return }
         if sceneColorTexture?.width != Int(view.drawableSize.width)
             || sceneColorTexture?.height != Int(view.drawableSize.height) {
-            rebuildSceneColorTexture(size: view.drawableSize)
+            rebuildSceneTargets(size: view.drawableSize)
         }
-        guard let sceneColorTexture else { return }
+        guard let sceneColorTexture, let sceneDepthTexture else { return }
 
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTime, 1.0 / 20.0))
@@ -418,7 +422,13 @@ final class Renderer: NSObject, MTKViewDelegate {
         let viewM = camera.viewMatrix()
         let projM = camera.projectionMatrix(aspect: aspect)
         var frame = FrameUniforms()
-        state.fillFrameUniforms(&frame, viewProjection: projM * viewM, cameraPosition: camera.smoothEye)
+        state.fillFrameUniforms(
+            &frame,
+            viewProjection: projM * viewM,
+            cameraPosition: camera.smoothEye,
+            cameraNear: ChaseCameraTuning.nearZ,
+            cameraFar: ChaseCameraTuning.farZ
+        )
         frameUniformsPointer().pointee = frame
 
         let draws = buildDrawList(state: state)
@@ -432,33 +442,35 @@ final class Renderer: NSObject, MTKViewDelegate {
             objectUniformsPointer(slot: i).pointee = obj
         }
 
-        guard let scenePassDescriptor = renderPassDescriptor.copy() as? MTL4RenderPassDescriptor else {
+        guard let opaquePassDescriptor = renderPassDescriptor.copy() as? MTL4RenderPassDescriptor else {
             fatalError("Failed to copy render pass descriptor")
         }
-        scenePassDescriptor.colorAttachments[0].texture = sceneColorTexture
-        scenePassDescriptor.colorAttachments[0].loadAction = .clear
-        scenePassDescriptor.colorAttachments[0].storeAction = .store
-        scenePassDescriptor.colorAttachments[0].clearColor = view.clearColor
+        opaquePassDescriptor.colorAttachments[0].texture = sceneColorTexture
+        opaquePassDescriptor.colorAttachments[0].loadAction = .clear
+        opaquePassDescriptor.colorAttachments[0].storeAction = .store
+        opaquePassDescriptor.colorAttachments[0].clearColor = view.clearColor
+        opaquePassDescriptor.colorAttachments[1].texture = sceneDepthTexture
+        opaquePassDescriptor.colorAttachments[1].loadAction = .clear
+        opaquePassDescriptor.colorAttachments[1].storeAction = .store
+        opaquePassDescriptor.colorAttachments[1].clearColor = MTLClearColor(red: Double(ChaseCameraTuning.farZ), green: 0, blue: 0, alpha: 1)
 
-        guard let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: scenePassDescriptor) else {
-            fatalError("Failed to create render command encoder")
+        guard let opaqueEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: opaquePassDescriptor) else {
+            fatalError("Failed to create opaque encoder")
         }
 
-        renderEncoder.label = "FloodSurfer Scene"
-        renderEncoder.setCullMode(.back)
-        renderEncoder.setFrontFacing(.counterClockwise)
-        renderEncoder.setDepthStencilState(depthState)
-        renderEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
-        renderEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+        opaqueEncoder.label = "FloodSurfer Opaque"
+        opaqueEncoder.setCullMode(.back)
+        opaqueEncoder.setFrontFacing(.counterClockwise)
+        opaqueEncoder.setDepthStencilState(depthState)
+        opaqueEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
+        opaqueEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+        opaqueEncoder.setRenderPipelineState(solidPipeline)
 
         vertexArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
         fragmentArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
 
-        for i in 0..<objectDrawCount {
-            let item = draws[i]
-            renderEncoder.setRenderPipelineState(item.isWave ? wavePipeline : solidPipeline)
-
-            let objAddr = objectUniformsGPUAddress(slot: i)
+        func drawItem(_ item: DrawItem, slot: Int, encoder: MTL4RenderCommandEncoder) {
+            let objAddr = objectUniformsGPUAddress(slot: slot)
             vertexArgumentTable.setAddress(objAddr, index: BufferIndex.objectUniforms.rawValue)
             fragmentArgumentTable.setAddress(objAddr, index: BufferIndex.objectUniforms.rawValue)
 
@@ -472,7 +484,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
 
             for submesh in item.mesh.submeshes {
-                renderEncoder.drawIndexedPrimitives(
+                encoder.drawIndexedPrimitives(
                     primitiveType: submesh.primitiveType,
                     indexCount: submesh.indexCount,
                     indexType: submesh.indexType,
@@ -482,7 +494,41 @@ final class Renderer: NSObject, MTKViewDelegate {
             }
         }
 
-        renderEncoder.endEncoding()
+        for i in 0..<objectDrawCount where !draws[i].isWave {
+            drawItem(draws[i], slot: i, encoder: opaqueEncoder)
+        }
+        opaqueEncoder.endEncoding()
+
+        guard let wavePassDescriptor = renderPassDescriptor.copy() as? MTL4RenderPassDescriptor else {
+            fatalError("Failed to copy wave pass descriptor")
+        }
+        wavePassDescriptor.colorAttachments[0].texture = sceneColorTexture
+        wavePassDescriptor.colorAttachments[0].loadAction = .load
+        wavePassDescriptor.colorAttachments[0].storeAction = .store
+        wavePassDescriptor.colorAttachments[1].texture = nil
+        wavePassDescriptor.depthAttachment.loadAction = .load
+        wavePassDescriptor.depthAttachment.storeAction = .dontCare
+        wavePassDescriptor.stencilAttachment.loadAction = .dontCare
+        wavePassDescriptor.stencilAttachment.storeAction = .dontCare
+
+        guard let waveEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: wavePassDescriptor) else {
+            fatalError("Failed to create wave encoder")
+        }
+        waveEncoder.label = "FloodSurfer Wave"
+        waveEncoder.setCullMode(.none)
+        waveEncoder.setFrontFacing(.counterClockwise)
+        waveEncoder.setDepthStencilState(depthState)
+        waveEncoder.setArgumentTable(vertexArgumentTable, stages: .vertex)
+        waveEncoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+        waveEncoder.setRenderPipelineState(wavePipeline)
+        vertexArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
+        fragmentArgumentTable.setAddress(frameUniformsGPUAddress(), index: BufferIndex.frameUniforms.rawValue)
+        fragmentArgumentTable.setTexture(sceneDepthTexture.gpuResourceID, index: TextureIndex.depth.rawValue)
+
+        for i in 0..<objectDrawCount where draws[i].isWave {
+            drawItem(draws[i], slot: i, encoder: waveEncoder)
+        }
+        waveEncoder.endEncoding()
 
         guard let postEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             fatalError("Failed to create post-process encoder")
@@ -521,38 +567,59 @@ final class Renderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         aspect = Float(size.width / max(size.height, 1))
 #if !targetEnvironment(simulator)
-        rebuildSceneColorTexture(size: size)
+        rebuildSceneTargets(size: size)
 #endif
     }
 
 #if !targetEnvironment(simulator)
-    private func rebuildSceneColorTexture(size: CGSize) {
+    private func rebuildSceneTargets(size: CGSize) {
         let width = max(Int(size.width), 1)
         let height = max(Int(size.height), 1)
-        if sceneColorTexture?.width == width, sceneColorTexture?.height == height {
+        if sceneColorTexture?.width == width,
+           sceneColorTexture?.height == height,
+           sceneDepthTexture?.width == width,
+           sceneDepthTexture?.height == height {
             return
         }
 
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: RenderTargetFormat.hdrScene,
             width: width,
             height: height,
             mipmapped: false
         )
-        descriptor.storageMode = .private
-        descriptor.usage = [.renderTarget, .shaderRead]
-        guard let newTexture = device.makeTexture(descriptor: descriptor) else {
+        colorDesc.storageMode = .private
+        colorDesc.usage = [.renderTarget, .shaderRead]
+
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: RenderTargetFormat.linearDepth,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        depthDesc.storageMode = .private
+        depthDesc.usage = [.renderTarget, .shaderRead]
+
+        guard let newColor = device.makeTexture(descriptor: colorDesc),
+              let newDepth = device.makeTexture(descriptor: depthDesc) else {
             sceneColorTexture = nil
+            sceneDepthTexture = nil
             return
         }
-        newTexture.label = "HDR Scene Color"
+        newColor.label = "HDR Scene Color"
+        newDepth.label = "Opaque Linear Depth"
 
         if let sceneColorTexture {
             residencySet.removeAllocation(sceneColorTexture)
         }
-        residencySet.addAllocation(newTexture)
+        if let sceneDepthTexture {
+            residencySet.removeAllocation(sceneDepthTexture)
+        }
+        residencySet.addAllocation(newColor)
+        residencySet.addAllocation(newDepth)
         residencySet.commit()
-        sceneColorTexture = newTexture
+        sceneColorTexture = newColor
+        sceneDepthTexture = newDepth
     }
 #endif
 }

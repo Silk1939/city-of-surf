@@ -24,6 +24,34 @@ enum ArtDirection {
     static let acesE: Float = 0.14
     static let displayGamma: Float = 2.2
 
+    static let bloomThreshold: Float = 1.05
+    static let bloomIntensity: Float = 0.55
+    static let bloomSoftKnee: Float = 0.45
+
+    enum Water {
+        static let deepColor = SIMD3<Float>(0.01, 0.08, 0.18)
+        static let midColor = SIMD3<Float>(0.04, 0.32, 0.46)
+        static let shallowColor = SIMD3<Float>(0.16, 0.68, 0.78)
+        static let foamColor = SIMD3<Float>(0.94, 0.97, 1.0)
+        static let fresnelBias: Float = 0.04
+        static let fresnelPower: Float = 4.5
+        static let sunSpecPower: Float = 220
+        static let sunSpecIntensity: Float = 2.4
+        static let crestFoamStrength: Float = 0.95
+        static let edgeFoamStrength: Float = 0.85
+        static let edgeFoamDepthMeters: Float = 1.35
+        static let roughnessClear: Float = 0.08
+        static let roughnessFoam: Float = 0.62
+
+        /// Four Gerstner layers: direction.xz, amplitude, wavelength, steepness, speed.
+        static let gerstner: [(dir: SIMD2<Float>, amplitude: Float, wavelength: Float, steepness: Float, speed: Float)] = [
+            (simd_normalize(SIMD2(0.18, 0.98)), 0.28, 11.0, 0.55, 1.35),
+            (simd_normalize(SIMD2(-0.55, 0.84)), 0.16, 6.5, 0.42, 1.85),
+            (simd_normalize(SIMD2(0.72, 0.69)), 0.10, 3.8, 0.35, 2.40),
+            (simd_normalize(SIMD2(-0.22, 0.98)), 0.06, 2.2, 0.28, 3.10)
+        ]
+    }
+
     static func exponentialFogFactor(distance: Float) -> Float {
         1 - exp(-fogDensity * max(distance, 0))
     }

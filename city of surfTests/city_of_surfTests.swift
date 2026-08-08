@@ -81,6 +81,16 @@ final class city_of_surfTests: XCTestCase {
         XCTAssertLessThan(farFog, 1)
     }
 
+    func testGerstnerWaveFieldHasFourLayersAndCrestFoam() {
+        XCTAssertEqual(ArtDirection.Water.gerstner.count, 4)
+        let wave = WaveField()
+        let foam = wave.crestFoam(x: 0, z: 0, time: 0.5, scrollZ: 0)
+        let n = wave.normal(x: 0, z: 0, time: 0.5, scrollZ: 0)
+        XCTAssertGreaterThanOrEqual(foam, 0)
+        XCTAssertLessThanOrEqual(foam, 1)
+        XCTAssertEqual(simd_length(n), 1, accuracy: 0.01)
+    }
+
     func testHDRTargetAndACESTonemapStayInDisplayRange() {
         XCTAssertEqual(RenderTargetFormat.hdrScene, .rgba16Float)
         XCTAssertEqual(RenderTargetFormat.display, .bgra8Unorm)
