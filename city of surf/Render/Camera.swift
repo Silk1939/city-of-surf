@@ -2,20 +2,22 @@
 //  Camera.swift
 //  city of surf
 //
-//  Hero flood framing: sit HIGH above the crest pile-up and look DOWN the face
-//  at the surfer — never skim horizontally into the wall (that reads as a flat cyan slab).
+//  LOCKED with WaveField framing preset:
+//    crestShift 3.2 → lip at z≈-3.2
+//    eyeOffset.z -2.2 → eye AHEAD of lip (must stay > -crestShift)
+//    look ahead down-canyon — never skim into the face normal (cyan wall).
 //
 
 import simd
 
 struct ChaseCamera {
-    /// High above crest, modest pullback — crestShift≈4 → lip near z≈-4.
-    var eyeOffset = SIMD3<Float>(0, 13.5, -8.0)
-    /// Look down at the rider / face (negative Y), not into the sun disk.
-    var lookAhead = SIMD3<Float>(0, -2.2, 5.5)
-    var smoothEye = SIMD3<Float>(0, 18, -10)
-    var fovDegrees: Float = 62
-    var nearZ: Float = 0.15
+    /// Co-scaled with WaveField amp≈4.5 / crestShift≈3.2. Eye-Z must stay > -crestShift.
+    var eyeOffset = SIMD3<Float>(0, 5.2, -2.2)
+    /// Canyon ahead, slight down — sells the descending face without FOV-eating wall.
+    var lookAhead = SIMD3<Float>(0, 0.4, 10.0)
+    var smoothEye = SIMD3<Float>(0, 10, -4)
+    var fovDegrees: Float = 68
+    var nearZ: Float = 0.12
     var farZ: Float = 320
     private var shakeOffset = SIMD3<Float>(repeating: 0)
     private var initialized = false
@@ -32,22 +34,21 @@ struct ChaseCamera {
 
     mutating func addImpulse(_ v: SIMD3<Float>) {
         let capped = SIMD3(
-            max(-0.8, min(0.8, v.x)),
-            max(-0.8, min(0.8, v.y)),
-            max(-0.8, min(0.8, v.z))
+            max(-0.85, min(0.85, v.x)),
+            max(-0.85, min(0.85, v.y)),
+            max(-0.85, min(0.85, v.z))
         )
         impulse += capped
         impulse = SIMD3(
-            max(-1.2, min(1.2, impulse.x)),
-            max(-1.2, min(1.2, impulse.y)),
-            max(-1.2, min(1.2, impulse.z))
+            max(-1.3, min(1.3, impulse.x)),
+            max(-1.3, min(1.3, impulse.y)),
+            max(-1.3, min(1.3, impulse.z))
         )
     }
 
     mutating func update(
         follow target: SIMD3<Float>,
         waveHeight: Float,
-        /// Water height under the intended eye XZ — stay clearly above the lip.
         eyeWaterHeight: Float,
         lean: Float,
         shake: Float,
@@ -55,12 +56,10 @@ struct ChaseCamera {
         deltaTime: Float
     ) {
         var desired = target + eyeOffset
-        // Always clear the crest by a wide margin — hero shot from above the lip.
-        let clearance: Float = 5.5
-        let fromTarget = waveHeight + eyeOffset.y
-        let fromEye = eyeWaterHeight + clearance
-        desired.y = max(fromTarget, fromEye)
-        desired.x += lean * 1.1
+        // Stay above local face water; clearance matches locked preset.
+        let clearance: Float = 2.2
+        desired.y = max(waveHeight + eyeOffset.y, eyeWaterHeight + clearance)
+        desired.x += lean * 1.2
         desired.y += shake * 0.8
         desired += impulse
         impulse *= max(0, 1 - deltaTime * 9)
@@ -70,26 +69,25 @@ struct ChaseCamera {
             initialized = true
         }
 
-        let blend = min(1, deltaTime * 7.5)
+        let blend = min(1, deltaTime * 8)
         smoothEye += (desired - smoothEye) * blend
         let minEyeY = eyeWaterHeight + clearance
         if smoothEye.y < minEyeY {
             smoothEye.y = minEyeY
         }
 
-        let targetRoll = lean * 0.035
-        rollBias += (targetRoll - rollBias) * min(1, deltaTime * 5)
+        let targetRoll = lean * 0.04
+        rollBias += (targetRoll - rollBias) * min(1, deltaTime * 5.5)
         let speedT = saturate((speed - 17) / 17)
-        let targetBoost: Float = speedT * 3.5
-        speedFovBoost += (targetBoost - speedFovBoost) * min(1, deltaTime * 2.5)
-        fovDegrees = 62 + speedFovBoost
+        speedFovBoost += (speedT * 4.0 - speedFovBoost) * min(1, deltaTime * 2.6)
+        fovDegrees = 68 + speedFovBoost
 
         if shake > 0.01 {
             let s = shake * shake * 0.45
             shakeOffset = SIMD3(
                 Float.random(in: -0.12...0.12) * s,
-                Float.random(in: -0.1...0.1) * s,
-                Float.random(in: -0.08...0.08) * s
+                Float.random(in: -0.09...0.09) * s,
+                Float.random(in: -0.07...0.07) * s
             )
         } else {
             shakeOffset *= 0.65

@@ -83,59 +83,48 @@ static float detail_height(float2 p, float t)
     return h;
 }
 
-/// MUST match WaveField.displacement() exactly.
+/// MUST match WaveField.displacement() exactly (locked framing preset).
 static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread float &foam)
 {
     float rz    = pos.z + frame.scrollZ;
     float w     = max(frame.waveLength, 0.5);
-    float sigma = max(w * 0.20, 1.2);
+    float sigma = max(w * 0.18, 1.0);
     float a     = frame.waveAmplitude;
     float Q     = frame.waveSteepness;
     float t     = frame.time;
 
-    float body = flood_body(rz, w);
-    float lip  = crest_lip(rz, w);
+    float body = 0.5 * (1.0 - tanh(rz / (w * 0.30)));
+    float lip  = exp(-(rz * rz) / (2.0 * sigma * sigma));
 
     float3 d = float3(0.0);
 
-    // Base bore + raised crest
-    d.y = a * (0.80 * body + 0.72 * Q * lip);
+    // Bore + crest lip — soft throw so chase cam never eats a cyan wall.
+    d.y = a * (0.82 * body + 0.90 * Q * lip);
 
-    // Gentler Gerstner pinch — hard pinch + tall amp → camera-facing slab + sawtooth lip.
     float pinch = (rz / sigma) * lip;
     d.z -= Q * sigma * 0.55 * pinch;
 
-    // Soft lip lift (readable crest without plunging fold)
     d.z += Q * a * 0.10 * lip * lip;
-    d.y += Q * a * 0.18 * lip * lip;
+    d.y += Q * a * 0.16 * lip * lip;
 
-    // Water piles up against canyon walls
     float wall = smoothstep(4.5, 8.5, abs(pos.x));
-    d.y += a * 0.14 * wall * body;
+    d.y += a * 0.10 * wall * body;
 
-    // Secondary long swell (synced with WaveField)
-    float swellPhase = rz * (2.0 * M_PI_F / 28.0) - t * 1.35;
-    d.y += a * 0.12 * body * sin(swellPhase);
-    d.z += a * 0.03 * body * cos(swellPhase);
+    float swellPhase = rz * (2.0 * M_PI_F / 24.0) - t * 1.1;
+    d.y += a * 0.09 * body * sin(swellPhase);
 
-    // Cross-chop mid wavelength
-    float crossPhase = (pos.x * 0.22 + rz * 0.08) - t * 1.9;
-    d.y += a * 0.045 * body * sin(crossPhase);
-
-    // Three octaves of travelling chop (synced with WaveField)
     float rk = (2.0 * M_PI_F) / max(frame.rippleLength, 0.001);
-    float chopAmp = frame.rippleAmplitude * (0.30 + 0.70 * body);
+    float chopAmp = frame.rippleAmplitude * (0.25 + 0.75 * body);
     float p1 = rk * (pos.x * 0.8 + rz * 0.6) - t * 3.1;
     float p2 = rk * 0.53 * (pos.x * -1.7 + rz * 1.3) - t * 2.3 + 1.7;
     float p3 = rk * 1.90 * (pos.x * 2.6 + rz * -0.4) - t * 4.7 + 4.1;
     d.y += chopAmp * (0.50 * sin(p1) + 0.35 * sin(p2) + 0.15 * sin(p3));
-    d.x += chopAmp * 0.35 * cos(p1);
+    d.x += chopAmp * 0.30 * cos(p1);
 
-    // Jacobian foam — milder pinch scale matches d.z above
     float dpinch = (1.0 - (rz * rz) / (sigma * sigma)) * lip / sigma;
     float jac = 1.0 - Q * sigma * 0.55 * dpinch;
     float faceMask = body * (1.0 - body) * 4.0;
-    foam = saturate(1.45 * lip + 0.55 * faceMask + saturate(0.55 - jac) * 1.1);
+    foam = saturate(1.50 * lip + 0.42 * faceMask + saturate(0.5 - jac) * 1.0);
 
     return pos + d;
 }
@@ -602,9 +591,9 @@ vertex VOut waveVertex(Vertex in [[stage_in]],
     float4 worldBase = object.modelMatrix * float4(in.position, 1.0);
     float foam = 0.0;
     float3 displaced = flood_displace(worldBase.xyz, frame, foam);
-    // GPU-only micro detail (visual) — does not affect WaveField gameplay samples.
+    // GPU-only micro detail (visual) — extra lift near foam/lip for volume.
     float detail = detail_height(worldBase.xz, frame.time);
-    displaced.y += detail * 0.26;
+    displaced.y += detail * (0.18 + 0.35 * foam);
     out.basePos = worldBase.xyz;
     out.worldPos = displaced;
     out.position = frame.viewProjectionMatrix * float4(displaced, 1.0);
@@ -688,16 +677,14 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float sss = pow(saturate(dot(V, -L) * 0.5 + 0.5), 2.5) * pow(h, 2.0);
     water += float3(0.180, 0.769, 0.714) * 1.05 * sss;
 
-    // Foam: chunky crest whitewater — readable lip without blown-out white sheet.
+    // Foam: thick crest ribbon — the white lip that sells the wave.
     float foamAmt = in.foam;
     float streak = valueNoise(in.basePos.xz * float2(0.55, 0.16) + float2(0.0, -t * 1.6));
     float chunk = valueNoise(in.basePos.xz * float2(1.4, 0.35) + float2(t * 0.2, -t * 2.4));
-    float foamMask = smoothstep(0.38, 0.72, foamAmt * (0.55 + 0.30 * streak + 0.25 * chunk));
-    foamMask *= step(0.10, foamAmt);
-    // Keep crest foam denser on the lip, thinner on face whitewater.
-    foamMask = saturate(foamMask * (0.75 + 0.55 * foamAmt));
-    foamMask = min(foamMask, 0.88);
-    float3 foamCol = mix(shallow * 1.25, float3(0.94, 0.97, 0.95), 0.72);
+    float foamMask = smoothstep(0.28, 0.62, foamAmt * (0.50 + 0.28 * streak + 0.22 * chunk));
+    foamMask = saturate(foamMask * (0.85 + 0.55 * foamAmt));
+    foamMask = min(foamMask, 0.90);
+    float3 foamCol = mix(shallow * 1.35, float3(0.96, 0.98, 0.96), 0.78);
     water = mix(water, foamCol, foamMask);
 
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
