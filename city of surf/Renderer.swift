@@ -106,6 +106,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     private var lastStylePulse: Float = 0
     /// HDR textures currently registered in `residencySet` (removed on recreate).
     private var residentHDRTextures: [MTLTexture] = []
+    /// Index range der Surfer-/Board-DrawItems in der aktuellen Draw-Liste (Befund-A-Messung).
+    private var surferDrawRange: Range<Int> = 0..<0
+    private var markerDrawCount = 0
 
     @MainActor
     init?(metalKitView: MTKView, gameState: GameState) {
@@ -719,6 +722,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         ))
 
         let lean = state.surfer.lean
+        let surferDrawStart = items.count
         surferVisual.appendDrawItems(
             to: &items,
             meshes: surferMeshes,
@@ -736,6 +740,18 @@ final class Renderer: NSObject, MTKViewDelegate {
                 isWipeout: state.isGameOver
             )
         )
+        surferDrawRange = surferDrawStart..<items.count
+
+        // Schritt 1: roter 2-m-Würfel + Achsenkreuz am Spieler-Ursprung.
+        let markerStart = items.count
+        if DebugMarkers.showPlayerMarker {
+            DebugMarkers.appendPlayerMarker(
+                to: &items,
+                box: unitBox,
+                position: state.surfer.position
+            )
+        }
+        markerDrawCount = items.count - markerStart
 
         // Wake / spray / mist — soft ellipsoids (material 8); coin sparks stay neon (material 3).
         let waterFXStart = instanceStreamer.nextIndex
@@ -1082,6 +1098,24 @@ final class Renderer: NSObject, MTKViewDelegate {
             print("[FloodSurfer] WARN object count \(draws.count) > maxObjectsPerFrame \(maxObjectsPerFrame) — clamping (missing unique draws)")
         }
         objectDrawCount = min(draws.count, maxObjectsPerFrame)
+
+        DebugMarkers.logPlayerProjection(
+            playerPosition: state.surfer.position,
+            playerHeight: state.surfer.currentHeight,
+            cameraEye: camera.smoothEye,
+            cameraTarget: state.surfer.position + camera.lookAhead,
+            nearZ: camera.nearZ,
+            farZ: camera.farZ,
+            fovDegrees: camera.fovDegrees,
+            aspect: aspect,
+            viewProjection: viewProj,
+            surferModelMatrix: surferDrawRange.isEmpty ? nil : draws[surferDrawRange.lowerBound].modelMatrix,
+            surferDrawCalls: surferDrawRange.count,
+            markerDrawCalls: markerDrawCount,
+            totalUniqueDraws: draws.count,
+            clampedDraws: draws.count > maxObjectsPerFrame
+        )
+
         for i in 0..<objectDrawCount {
             var obj = ObjectUniforms()
             obj.modelMatrix = draws[i].modelMatrix
