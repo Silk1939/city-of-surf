@@ -20,8 +20,9 @@ enum DebugMarkers {
 
     // MARK: - Tuning (Teil 5: alle Werte an einer Stelle)
 
-    /// Master-Schalter für den Schritt-1-Marker. Auf `false` = komplett aus, kein Draw-Call.
-    static var showPlayerMarker = true
+    /// Master-Schalter für den Schritt-1-Marker. Der Pipeline-Beweis ist erbracht;
+    /// im normalen Bild bleibt der Marker aus.
+    static var showPlayerMarker = false
     /// Frame-1-Diagnose aus Befund A in die Konsole schreiben.
     static var logFrameOneDiagnostics = true
 

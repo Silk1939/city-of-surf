@@ -28,6 +28,8 @@ struct DrawItem {
     var materialId: Float
     var castsShadow: Bool = false
     var receivesShadow: Bool = true
+    /// Barrel interior and exterior must both survive rasterization.
+    var doubleSided: Bool = false
 }
 
 final class Renderer: NSObject, MTKViewDelegate {
@@ -860,6 +862,23 @@ final class Renderer: NSObject, MTKViewDelegate {
             receivesShadow: false
         ))
 
+        // Geometric Hero-Wave prototype. The profile already contains a measured
+        // overhang; place the static sweep ahead of the chase camera and yaw the
+        // crest into the canyon. Shading/animation/seam work belongs to later steps.
+        let heroModel =
+            Math.translation(SIMD3(-3.0, 0.0, 13.0))
+            * Math.rotation(radians: Math.radians(-35.0), axis: SIMD3(0, 1, 0))
+        items.append(DrawItem(
+            mesh: heroWaveMesh,
+            modelMatrix: heroModel,
+            color: SIMD4(0.04, 0.78, 0.72, 1),
+            isWave: false,
+            materialId: 0,
+            castsShadow: false,
+            receivesShadow: false,
+            doubleSided: true
+        ))
+
         let lean = state.surfer.lean
         let surferDrawStart = items.count
         surferVisual.appendDrawItems(
@@ -1299,6 +1318,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         renderEncoder.setDepthStencilState(depthState)
         for i in 0..<objectDrawCount {
             let item = draws[i]
+            renderEncoder.setCullMode(item.doubleSided ? .none : .back)
             renderEncoder.setRenderPipelineState(item.isWave ? wavePipeline : solidPipeline)
             let objAddr = objectUniformsGPUAddress(slot: i)
             vertexArgumentTable.setAddress(objAddr, index: BufferIndex.objectUniforms.rawValue)
@@ -1306,6 +1326,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             bindMaterialTextures(for: item)
             encodeMesh(item, encoder: renderEncoder)
         }
+        renderEncoder.setCullMode(.back)
         encodeInstancedBatches(encoder: renderEncoder, shadowPass: false)
         renderEncoder.endEncoding()
 
