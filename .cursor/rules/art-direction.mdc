@@ -1,0 +1,33 @@
+---
+description: Art direction for all rendering/shader/visual work
+alwaysApply: true
+---
+
+# CITY SURFER Art Direction
+
+Look: stylized & saturated "city flood surrealism" at sunset. Alto's Odyssey polish, but urban.
+NOT photorealistic. Clean shapes, bold color, chunky readable foam.
+
+Signature contrast: warm orange light vs. cool teal water. Every scene must read as
+"orange sky above, teal water below, warm rim light on everything".
+
+Canonical palette (linear-space intent — tune via `ArtDirection.swift` / uniforms, not scattered magic numbers):
+- Sky zenith:    deep dusk blue   `#2B3A67`
+- Sky horizon:   hot orange       `#FF7A3C`
+- Sun disc:      near-white gold  `#FFE8B0`
+- Water deep:    dark teal        `#0A3A4A`
+- Water shallow: bright turquoise `#2EC4B6`
+- Foam:          warm white       `#FFF6E9`
+- Buildings:     warm concrete    `#C9A27E` (sun side) / cool blue-grey `#5C6B85` (shadow side)
+- Neon accents:  magenta `#FF3E8A` and cyan `#38E5FF`, used sparingly
+
+When changing look: update `Render/ArtDirection.swift` and mirror literals in `Shaders.metal` in the same change.
+
+## Technical rules
+- Render HDR: offscreen `rgba16Float` scene target → bloom in HDR → ACES-style tonemap in the final composite (never tonemap in sky/solid/wave fragments).
+- Lighting: one directional "sun" low on the horizon + sky ambient (hemisphere: orange from horizon, blue from zenith).
+- Fog is WARM (mix toward horizon orange, never grey).
+- Prefer cheap stylized tricks (gradients, fresnel, rim light, vertex animation) over expensive physically-correct techniques. Target: 60 fps (ideally 120) on iPhone, portrait.
+- Never break the existing MTL4 frame pacing / residency set setup. Every new buffer or texture must be added to the residency set.
+- Water: no shadow-map receive — soft edge darkening / stylized tricks only.
+- After meaningful look changes: `make device-build` and compare a device screenshot to the art reference.

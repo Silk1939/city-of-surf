@@ -1,0 +1,22 @@
+{
+  "sunDirection": [
+    0.12,
+    0.42,
+    0.90
+  ],
+  "sunColor": [
+    1.0,
+    0.72,
+    0.42
+  ],
+  "sunIntensity": 1.85,
+  "iblIntensity": 0.55,
+  "skyPeak": 19.75,
+  "irradiancePeak": 19.75,
+  "irradianceMapPeak": 1.5808300971984863,
+  "specularMips": 5,
+  "shadowBias": 0.0035,
+  "hdri": "sunset_jhbcentral",
+  "iblFormat": "rgba16f_ktx",
+  "note": "Display sky is procedural; sun ahead down +Z canyon (ArtDirection.swift)"
+}
