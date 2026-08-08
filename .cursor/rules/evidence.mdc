@@ -1,0 +1,57 @@
+---
+description: Beweispflicht — keine Aussage über das Aussehen ohne Beleg
+alwaysApply: true
+---
+
+# Beweispflicht
+
+Gilt in jeder Session, für jede Änderung an Rendering, Kamera, Wasser, Physik, FX und HUD.
+
+## 1. Keine Aussage über das visuelle Ergebnis ohne Beleg
+
+Verboten sind "sieht jetzt gut aus", "sollte funktionieren", "die Welle ist sichtbar",
+"wie erwartet". Wenn kein Beleg vorliegt, heißt es **"unbelegt"** — nicht "sieht gut aus".
+
+Ein Beleg ist genau eines von beidem:
+- ein Gerätescreenshot, den der Nutzer geschickt hat und der tatsächlich angeschaut wurde, oder
+- ein Messwert aus `FrameDiagnostics` / dem Test-Target.
+
+Ein grüner Build ist **kein** Beleg für Aussehen.
+
+## 2. Ursachen werden gemessen, nicht vermutet
+
+Vor jedem Fix steht ein Messwert, der die Ursache belegt. Kandidatenlisten werden
+einzeln widerlegt, nicht durcheinandergeworfen. Wer "Framing" sagt, nennt NDC-Werte,
+Frustum-Flag und Draw-Call-Zahl. Wer "Scale 0" sagt, nennt Scale und Determinante.
+
+"Ich habe die Ursache nicht gefunden" plus Hypothesen und Messwerten ist ein
+akzeptables Ergebnis. "Behoben" ohne Messwert ist es nicht.
+
+## 3. Ein Problem, eine Ursache, ein Fix, ein Commit
+
+Niemals mehrere Befunde in einem Commit — auch dann nicht, wenn zwei Befunde dieselbe
+Ursache haben. Getrennte Commits, damit ein späterer Fehler eindeutig zuordenbar bleibt.
+
+## 4. Rein visuelle Punkte: erst Erwartung, dann Screenshot anfordern
+
+Für Wellenform, Schaum, Beleuchtung, Atmosphäre, HUD-Layout und alles andere, was man
+nur sehen kann, gilt diese Reihenfolge, und das Beschreiben vorher ist Pflicht:
+
+1. Klar sagen: **"hier brauche ich einen Gerätescreenshot"**.
+2. Den genauen `make`-Befehl nennen.
+3. **Vorher** beschreiben, was auf dem Bild zu sehen sein müsste, wenn es geklappt hat —
+   inklusive ungefährer Bildposition, damit der Nutzer gegen die Erwartung prüfen kann.
+4. Erst dann den Screenshot anfordern und gegen die Erwartung auswerten, einschließlich
+   der Dinge, die weiterhin falsch sind.
+
+## 5. Warum kein Simulator-Screenshot
+
+`xcrun simctl io booted screenshot` ist in diesem Projekt **technisch unmöglich**, nicht
+nur unerwünscht: Das iPhoneSimulator-SDK kennt die Metal-4-Typen nicht
+(`cannot find type 'MTL4RenderCommandEncoder' / 'MTL4RenderPassDescriptor' in scope`).
+Visuelle Belege kommen ausschließlich vom Gerät, numerische aus dem Harness.
+
+## 6. Ein Schritt ist erst fertig, wenn die Assertion grün ist
+
+Zu jedem Schritt gehört eine Assertion im Test-Target, die rot wird, wenn die Bedingung
+verletzt ist. Ohne grüne Assertion gilt der Schritt als offen.
