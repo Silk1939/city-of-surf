@@ -28,14 +28,19 @@ struct DiagnosticsHarness {
 
     /// Simuliert `frameCount` Frames bei 60 Hz und liefert pro Frame einen Datensatz.
     /// `steer` erlaubt es, Eingaben nachzustellen (z. B. Kurven für Befund C/H).
+    /// `configureCamera` dient der Ursachenanalyse: damit lassen sich einzelne
+    /// Kameraparameter kontrafaktisch abschalten, um ihren Anteil am Fehler in
+    /// NDC-Einheiten zu beziffern.
     static func run(
         frameCount: Int,
         aspect: Float = portraitAspect,
-        steer: ((GameState, Int) -> Void)? = nil
+        steer: ((GameState, Int) -> Void)? = nil,
+        configureCamera: ((inout ChaseCamera) -> Void)? = nil
     ) -> Result {
         let state = GameState()
         state.reset()
         var camera = ChaseCamera()
+        configureCamera?(&camera)
         let dt: Float = 1.0 / 60.0
         var records: [FrameDiagnostics] = []
         records.reserveCapacity(frameCount)
@@ -61,6 +66,13 @@ struct DiagnosticsHarness {
             let scale = DiagnosticsMath.scale(of: playerModel)
             let eye = camera.smoothEye
             let target = state.surfer.position + camera.lookAhead
+            let forward = simd_normalize(target - eye)
+            let waterY = state.wave.height(
+                x: state.surfer.x,
+                z: state.surfer.position.z,
+                time: state.time,
+                scrollZ: state.scrollZ
+            )
 
             var nonFinite: [String] = []
             if DiagnosticsMath.containsNonFinite(viewM) { nonFinite.append("view") }
@@ -75,12 +87,14 @@ struct DiagnosticsHarness {
                 time: state.time,
                 camera: .init(
                     eye: eye,
-                    forward: simd_normalize(target - eye),
+                    forward: forward,
                     target: target,
                     nearZ: camera.nearZ,
                     farZ: camera.farZ,
                     fovDegrees: camera.fovDegrees,
-                    aspect: aspect
+                    aspect: aspect,
+                    pitchDegrees: DiagnosticsMath.pitchDegrees(forward: forward),
+                    halfFovVerticalDegrees: camera.fovDegrees * 0.5
                 ),
                 player: .init(
                     position: state.surfer.position,
@@ -95,6 +109,11 @@ struct DiagnosticsHarness {
                     modelDeterminant: DiagnosticsMath.determinant(of: playerModel),
                     invisibleReason: DiagnosticsMath.invisibleReason(
                         clip: projected.clip, ndc: projected.ndc, drawn: true, scale: scale
+                    ),
+                    waterHeight: waterY,
+                    heightAboveWater: state.surfer.position.y - waterY,
+                    angleBelowViewAxisDegrees: DiagnosticsMath.angleBelowViewAxis(
+                        eye: eye, target: target, point: state.surfer.position
                     )
                 ),
                 draws: .init(),

@@ -734,18 +734,29 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let eye = camera.smoothEye
         let target = playerPos + camera.lookAhead
+        let forward = simd_normalize(target - eye)
+        // Gleiche Abtastung wie ChaseCamera.follow, damit Kamera und Messung
+        // nachweislich dieselbe Wasserhöhe meinen.
+        let waterY = state.wave.height(
+            x: state.surfer.x,
+            z: playerPos.z,
+            time: state.time,
+            scrollZ: state.scrollZ
+        )
 
         return FrameDiagnostics(
             frame: frameIndex,
             time: state.time,
             camera: FrameDiagnostics.CameraInfo(
                 eye: eye,
-                forward: simd_normalize(target - eye),
+                forward: forward,
                 target: target,
                 nearZ: camera.nearZ,
                 farZ: camera.farZ,
                 fovDegrees: camera.fovDegrees,
-                aspect: aspect
+                aspect: aspect,
+                pitchDegrees: DiagnosticsMath.pitchDegrees(forward: forward),
+                halfFovVerticalDegrees: camera.fovDegrees * 0.5
             ),
             player: FrameDiagnostics.PlayerInfo(
                 position: playerPos,
@@ -758,6 +769,11 @@ final class Renderer: NSObject, MTKViewDelegate {
                 modelDeterminant: DiagnosticsMath.determinant(of: playerModel),
                 invisibleReason: DiagnosticsMath.invisibleReason(
                     clip: projected.clip, ndc: projected.ndc, drawn: drawn, scale: modelScale
+                ),
+                waterHeight: waterY,
+                heightAboveWater: playerPos.y - waterY,
+                angleBelowViewAxisDegrees: DiagnosticsMath.angleBelowViewAxis(
+                    eye: eye, target: target, point: playerPos
                 )
             ),
             draws: census,

@@ -31,6 +31,12 @@ struct FrameDiagnostics: Codable {
         var farZ: Float
         var fovDegrees: Float
         var aspect: Float
+        /// Neigung der Blickachse in Grad. Negativ = nach unten.
+        /// Als Zahl, nicht als Vektor, damit „blickt zu flach" prüfbar wird.
+        var pitchDegrees: Float
+        /// Halbes vertikales Sichtfeld in Grad. Alles, was weiter als dieser Winkel
+        /// von der Blickachse abliegt, ist außerhalb des Bildes.
+        var halfFovVerticalDegrees: Float
     }
 
     struct PlayerInfo: Codable {
@@ -50,6 +56,16 @@ struct FrameDiagnostics: Codable {
         var modelDeterminant: Float
         /// Warum er nicht sichtbar ist, in Klartext — leer, wenn sichtbar.
         var invisibleReason: String
+        /// Wasserhöhe aus dem geteilten Höhenfeld an der X/Z-Position des Surfers.
+        /// Dieselbe Abtastung, die `ChaseCamera.follow` benutzt.
+        var waterHeight: Float
+        /// position.y − waterHeight. Stark negativ hieße: der Surfer steckt unter
+        /// Wasser, also falsche Y-Verankerung statt eines Kameraproblems.
+        var heightAboveWater: Float
+        /// Winkel zwischen Blickachse und dem Vektor Auge→Surfer, in Grad.
+        /// Positiv = der Surfer liegt unterhalb der Blickachse. Überschreitet er
+        /// `halfFovVerticalDegrees`, kippt der Surfer aus dem Bild.
+        var angleBelowViewAxisDegrees: Float
     }
 
     /// Draw-Calls nach Objekttyp. `instanced*` zählt Instanzen, nicht Batches.
@@ -171,6 +187,32 @@ enum DiagnosticsMath {
     /// Werte außerhalb 0…pixelHeight liegen außerhalb des Bildes.
     static func screenY(ndcY: Float, pixelHeight: Float) -> Float {
         (1 - (ndcY * 0.5 + 0.5)) * pixelHeight
+    }
+
+    /// Neigung einer Blickrichtung in Grad. Negativ = nach unten.
+    static func pitchDegrees(forward: SIMD3<Float>) -> Float {
+        let f = simd_normalize(forward)
+        guard f.y.isFinite else { return .nan }
+        return asin(max(-1, min(1, f.y))) * 180 / .pi
+    }
+
+    /// Wie weit ein Punkt unterhalb der Blickachse liegt, in Grad, gemessen in der
+    /// vertikalen Ebene der Kamera. Positiv = unterhalb. Direkt vergleichbar mit
+    /// dem halben vertikalen Sichtfeld: größer heißt außerhalb des Bildes.
+    static func angleBelowViewAxis(
+        eye: SIMD3<Float>,
+        target: SIMD3<Float>,
+        point: SIMD3<Float>,
+        up: SIMD3<Float> = SIMD3(0, 1, 0)
+    ) -> Float {
+        let f = simd_normalize(target - eye)
+        let right = simd_normalize(simd_cross(f, up))
+        let camUp = simd_cross(right, f)
+        let d = point - eye
+        guard simd_length(d) > 1e-6 else { return 0 }
+        let vertical = simd_dot(d, camUp)
+        let along = simd_dot(d, f)
+        return -atan2(vertical, along) * 180 / .pi
     }
 }
 
