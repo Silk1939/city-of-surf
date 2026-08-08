@@ -5,11 +5,15 @@
 //  Eine Assertion pro Befund. Ein Schritt der Reihenfolge gilt erst als fertig,
 //  wenn die zugehörige Assertion grün ist.
 //
-//  Stand beim Anlegen (nur Schritt 1 erledigt):
-//    A  Surfer sichtbar      → ROT, Ursache wird hier gemessen
-//    B  Welle nicht flach    → prüft das geteilte CPU-Höhenfeld
-//    C  Coins vor der Linse  → misst den Near-Plane-Zähler
-//    Matrizen endlich        → NaN/Inf-Wächter
+//  KATEGORIE 1 — hier drin, gilt auch auf dem Simulator:
+//  Projektionsmathematik, Frustum-Lage des Spielers, Model-Matrix, NaN-Wächter,
+//  Plausibilität der Spielerposition, Coin-Spawn-Abstand, das geteilte CPU-Höhenfeld.
+//
+//  KATEGORIE 2 — in DeviceOnlyTests.swift, wird auf dem Simulator übersprungen:
+//  Draw-Calls je Objekttyp, vom Shader erzeugte Vertexhöhen, Depth- und
+//  Blend-Verhalten, Frame- und GPU-Zeit. Übersprungen heißt offen, nicht bestanden.
+//
+//  Offene Gerätepunkte stehen gesammelt in docs/OPEN_DEVICE_CHECKS.md.
 //
 
 import XCTest
@@ -69,34 +73,41 @@ final class DiagnosticsTests: XCTestCase {
         )
     }
 
-    // MARK: - Befund B: Es muss eine Welle geben
+    // MARK: - Geteilte CPU-Quelle des Höhenfelds
 
-    /// Die geteilte Höhenfunktion muss im Kamerabereich echte Auslenkung liefern.
-    /// Liegt `range` nahe 0, ist das Wasser eine flache Ebene.
-    ///
-    /// Wichtig: das misst `WaveField` auf der CPU, nicht die gerenderten GPU-Vertices.
-    /// Grün heißt hier „die geteilte Quelle ist nicht flach", nicht „im Bild ist eine
-    /// Welle zu sehen". Letzteres braucht einen Gerätescreenshot.
-    func testBefundB_waveFieldIsNotFlat() {
+    // Bewusst NICHT „testBefundB…" genannt. Befund B ist die Aussage „im Bild ist
+    // eine flache Ebene mit gekachelter Textur". Diese Tests messen ausschließlich
+    // `WaveField` auf der CPU. Grün heißt: die geteilte Quelle ist nicht flach.
+    // Grün heißt NICHT: im Bild ist eine Welle zu sehen. Ob die GPU-Geometrie der
+    // CPU-Quelle folgt, entscheidet allein ein Gerätescreenshot oder eine
+    // Vertex-Rückmessung — siehe DeviceOnlyTests und docs/OPEN_DEVICE_CHECKS.md.
+
+    /// Das geteilte Höhenfeld muss im Kamerabereich echte Auslenkung liefern.
+    /// Liegt `range` nahe 0, wäre schon die CPU-Quelle flach.
+    func testWaveFieldSourceIsNotFlat() {
         let w = simulate().last.wave
         XCTAssertGreaterThan(
             w.range, 0.5,
-            "Höhenfeld ist praktisch flach: min=\(w.minY) max=\(w.maxY) range=\(w.range)"
+            "CPU-Höhenfeld ist praktisch flach: min=\(w.minY) max=\(w.maxY) range=\(w.range)"
         )
     }
 
-    /// Die Welle muss sich auch bewegen, nicht nur einmalig ausgelenkt sein.
-    func testBefundB_waveChangesOverTime() {
+    /// Das geteilte Höhenfeld muss sich über die Zeit bewegen.
+    func testWaveFieldSourceChangesOverTime() {
         let result = simulate(180)
         let early = result.frames[30].wave.avgY
         let late = result.frames[170].wave.avgY
         XCTAssertGreaterThan(
             abs(late - early), 0.01,
-            "Mittlere Wellenhöhe ändert sich nicht: \(early) → \(late)"
+            "Mittlere Höhe der CPU-Quelle ändert sich nicht: \(early) → \(late)"
         )
     }
 
-    // MARK: - Befund C: Keine Coins vor der Linse
+    // MARK: - Befund C: Spawn-Abstand der Coins
+
+    // Achtung, Umfang: dieser Test deckt NUR die Weltposition ab. Alpha-Blending
+    // ohne Depth-Write und die Tiefensortierung der Coins sind damit ausdrücklich
+    // NICHT belegt — beides steht in DeviceOnlyTests und docs/OPEN_DEVICE_CHECKS.md.
 
     /// Kein Coin darf näher an der Kamera liegen als Near-Plane + 1 m. Genau diese
     /// erscheinen als riesige Blasen direkt vor dem Objektiv.
@@ -136,6 +147,18 @@ final class DiagnosticsTests: XCTestCase {
         }
     }
 
+    /// Ein headless Lauf darf niemals behaupten, dass gezeichnet wurde.
+    /// Das ist der Wächter gegen genau die Sorte Selbstbetrug, die diesen
+    /// Harness sonst wertlos machen würde.
+    func testHeadlessRunNeverClaimsItDrew() {
+        for f in simulate(60).frames {
+            XCTAssertEqual(
+                f.player.drawStatus, .notMeasured,
+                "Headless-Lauf behauptet Draw-Status \(f.player.drawStatus.rawValue)"
+            )
+        }
+    }
+
     // MARK: - Selbsttest des Harness
 
     /// Wenn die Projektionsmathematik selbst falsch wäre, wären alle anderen Zahlen
@@ -156,15 +179,23 @@ final class DiagnosticsTests: XCTestCase {
         let behind = DiagnosticsMath.project(SIMD3(0, 0, -10), viewProjection: proj * view)
         XCTAssertLessThan(behind.clip.w, 0)
         let reason = DiagnosticsMath.invisibleReason(
-            clip: behind.clip, ndc: behind.ndc, drawn: true, scale: SIMD3(1, 1, 1)
+            clip: behind.clip, ndc: behind.ndc, drawStatus: .drawn, scale: SIMD3(1, 1, 1)
         )
         XCTAssertTrue(reason.contains("hinter der Kamera"), "Grund war: \(reason)")
 
         // Punkt weit unterhalb: der Grund muss „unter dem unteren Bildrand" nennen.
         let below = DiagnosticsMath.project(SIMD3(0, -40, 10), viewProjection: proj * view)
         let belowReason = DiagnosticsMath.invisibleReason(
-            clip: below.clip, ndc: below.ndc, drawn: true, scale: SIMD3(1, 1, 1)
+            clip: below.clip, ndc: below.ndc, drawStatus: .drawn, scale: SIMD3(1, 1, 1)
         )
         XCTAssertTrue(belowReason.contains("unter dem unteren Bildrand"), "Grund war: \(belowReason)")
+
+        // Winkelmessung: ein Punkt genau unter der Blickachse muss den Winkel liefern,
+        // den die Trigonometrie vorgibt.
+        let angle = DiagnosticsMath.angleBelowViewAxis(
+            eye: .zero, target: SIMD3(0, 0, 10), point: SIMD3(0, -10, 10)
+        )
+        XCTAssertEqual(angle, 45, accuracy: 0.01)
+        XCTAssertEqual(DiagnosticsMath.pitchDegrees(forward: SIMD3(0, -1, 1)), -45, accuracy: 0.01)
     }
 }

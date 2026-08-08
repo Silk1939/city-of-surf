@@ -102,13 +102,13 @@ struct DiagnosticsHarness {
                     clip: projected.clip,
                     ndc: projected.ndc,
                     inFrustum: DiagnosticsMath.inFrustum(ndc: projected.ndc),
-                    // Headless: der Draw-Loop läuft nicht. `drawn` bezieht sich hier
-                    // darauf, dass eine gültige Wurzeltransform existiert.
-                    drawn: !DiagnosticsMath.containsNonFinite(playerModel),
+                    // Headless gibt es keinen Draw-Loop. Hier darf nie „gezeichnet"
+                    // behauptet werden — das kann ausschließlich der Gerätelauf messen.
+                    drawStatus: .notMeasured,
                     modelScale: scale,
                     modelDeterminant: DiagnosticsMath.determinant(of: playerModel),
                     invisibleReason: DiagnosticsMath.invisibleReason(
-                        clip: projected.clip, ndc: projected.ndc, drawn: true, scale: scale
+                        clip: projected.clip, ndc: projected.ndc, drawStatus: .notMeasured, scale: scale
                     ),
                     waterHeight: waterY,
                     heightAboveWater: state.surfer.position.y - waterY,

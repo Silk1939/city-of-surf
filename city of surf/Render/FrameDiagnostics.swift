@@ -20,6 +20,18 @@ import simd
 
 // MARK: - Datensatz
 
+/// Hat der Draw-Loop wirklich Geometrie für den Spieler eingereiht?
+///
+/// `notMeasured` ist der wichtigste Fall: ein Headless- oder Simulatorlauf hat
+/// überhaupt keinen Draw-Loop. Er darf deshalb niemals „gezeichnet" behaupten,
+/// auch dann nicht, wenn alle Matrizen gesund aussehen. Nur der Renderer auf dem
+/// Gerät setzt `drawn` oder `notDrawn`.
+enum DrawStatus: String, Codable {
+    case drawn
+    case notDrawn
+    case notMeasured
+}
+
 /// Ein Frame, eine Zeile JSON. Bewusst flach gehalten, damit `jq` damit arbeiten kann.
 struct FrameDiagnostics: Codable {
 
@@ -48,8 +60,8 @@ struct FrameDiagnostics: Codable {
         var ndc: SIMD3<Float>
         /// Liegt der Ursprung im Frustum?
         var inFrustum: Bool
-        /// Wurde tatsächlich Geometrie für den Spieler eingereiht?
-        var drawn: Bool
+        /// Wurde tatsächlich Geometrie für den Spieler eingereiht? Siehe `DrawStatus`.
+        var drawStatus: DrawStatus
         /// Skalierung aus der Model-Matrix des ersten Spieler-DrawItems.
         var modelScale: SIMD3<Float>
         /// Determinante derselben Matrix. 0 = entartet, negativ = gespiegelt.
@@ -168,9 +180,18 @@ enum DiagnosticsMath {
     /// Klartext-Begründung, warum ein Punkt nicht im Bild landet. Leer = sichtbar.
     /// Trennt sauber zwischen „hinter der Kamera", „vor der Near-Plane", „seitlich
     /// draußen" und „über/unter dem Bildrand" — das sind vier verschiedene Ursachen.
-    static func invisibleReason(clip: SIMD4<Float>, ndc: SIMD3<Float>, drawn: Bool, scale: SIMD3<Float>) -> String {
+    static func invisibleReason(
+        clip: SIMD4<Float>,
+        ndc: SIMD3<Float>,
+        drawStatus: DrawStatus,
+        scale: SIMD3<Float>
+    ) -> String {
         var reasons: [String] = []
-        if !drawn { reasons.append("kein DrawItem eingereiht") }
+        switch drawStatus {
+        case .drawn: break
+        case .notDrawn: reasons.append("kein DrawItem eingereiht")
+        case .notMeasured: reasons.append("Draw-Status nicht gemessen (kein Draw-Loop)")
+        }
         if scale.x < 1e-4 || scale.y < 1e-4 || scale.z < 1e-4 { reasons.append("Model-Scale ~0") }
         if !ndc.x.isFinite || !ndc.y.isFinite || !ndc.z.isFinite { reasons.append("NDC ist NaN") }
         if clip.w <= 0 { reasons.append("hinter der Kamera (w<=0)") }

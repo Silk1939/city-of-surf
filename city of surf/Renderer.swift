@@ -719,7 +719,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         census.clamped = draws.count > maxObjectsPerFrame
 
         let playerPos = state.surfer.position
+        // Auf dem Gerät läuft ein echter Draw-Loop, hier wird also wirklich gemessen.
         let drawn = !surferDrawRange.isEmpty
+        let drawStatus: DrawStatus = drawn ? .drawn : .notDrawn
         let playerModel = drawn ? draws[surferDrawRange.lowerBound].modelMatrix : matrix_identity_float4x4
         let modelScale = drawn ? DiagnosticsMath.scale(of: playerModel) : SIMD3<Float>(repeating: 0)
         let projected = DiagnosticsMath.project(playerPos, viewProjection: viewProjection)
@@ -764,11 +766,11 @@ final class Renderer: NSObject, MTKViewDelegate {
                 clip: projected.clip,
                 ndc: projected.ndc,
                 inFrustum: DiagnosticsMath.inFrustum(ndc: projected.ndc),
-                drawn: drawn,
+                drawStatus: drawStatus,
                 modelScale: modelScale,
                 modelDeterminant: DiagnosticsMath.determinant(of: playerModel),
                 invisibleReason: DiagnosticsMath.invisibleReason(
-                    clip: projected.clip, ndc: projected.ndc, drawn: drawn, scale: modelScale
+                    clip: projected.clip, ndc: projected.ndc, drawStatus: drawStatus, scale: modelScale
                 ),
                 waterHeight: waterY,
                 heightAboveWater: playerPos.y - waterY,

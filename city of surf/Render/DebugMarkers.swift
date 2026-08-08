@@ -106,7 +106,7 @@ enum DebugMarkers {
         print(String(format: "\(p) clip(origin)     = (%.3f, %.3f, %.3f, w=%.3f)",
                      pl.clip.x, pl.clip.y, pl.clip.z, pl.clip.w))
         print(String(format: "\(p) NDC(origin)      = (%.3f, %.3f, %.3f)", pl.ndc.x, pl.ndc.y, pl.ndc.z))
-        print("\(p) inFrustum=\(pl.inFrustum) drawn=\(pl.drawn)")
+        print("\(p) inFrustum=\(pl.inFrustum) drawStatus=\(pl.drawStatus.rawValue)")
         print(String(format: "\(p) modelScale       = (%.3f, %.3f, %.3f) det=%.4f",
                      pl.modelScale.x, pl.modelScale.y, pl.modelScale.z, pl.modelDeterminant))
         print("\(p) invisibleReason  = \(pl.invisibleReason.isEmpty ? "— (sichtbar)" : pl.invisibleReason)")
