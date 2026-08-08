@@ -22,8 +22,8 @@ struct WaterQualityProfile {
 
     /// High: readable crest + dense chop, ~160 particles.
     static let high = WaterQualityProfile(
-        waveSegmentsX: 56,
-        waveSegmentsZ: 300,
+        waveSegmentsX: 64,
+        waveSegmentsZ: 400,
         particleRate: 1.0,
         maxParticles: 160,
         particleScale: 1.0

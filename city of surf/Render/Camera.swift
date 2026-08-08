@@ -2,20 +2,20 @@
 //  Camera.swift
 //  city of surf
 //
-//  Stabilization: snap smoothEye on first/reset frame so we never start underwater.
-//  Always clear local water at the eye — never sit inside the crest wall.
+//  Hero flood framing: sit HIGH above the crest pile-up and look DOWN the face
+//  at the surfer — never skim horizontally into the wall (that reads as a flat cyan slab).
 //
 
 import simd
 
 struct ChaseCamera {
-    /// Behind + above the surfer, outside the crest pile-up (co-scaled with amp≈7).
-    var eyeOffset = SIMD3<Float>(0, 9.0, -10.5)
-    /// Look toward the rider / down-canyon — not up the face into a teal wall.
-    var lookAhead = SIMD3<Float>(0, 1.4, 7.0)
-    var smoothEye = SIMD3<Float>(0, 16, -12)
-    var fovDegrees: Float = 68
-    var nearZ: Float = 0.1
+    /// High above crest, modest pullback — crestShift≈4 → lip near z≈-4.
+    var eyeOffset = SIMD3<Float>(0, 13.5, -8.0)
+    /// Look down at the rider / face (negative Y), not into the sun disk.
+    var lookAhead = SIMD3<Float>(0, -2.2, 5.5)
+    var smoothEye = SIMD3<Float>(0, 18, -10)
+    var fovDegrees: Float = 62
+    var nearZ: Float = 0.15
     var farZ: Float = 320
     private var shakeOffset = SIMD3<Float>(repeating: 0)
     private var initialized = false
@@ -32,22 +32,22 @@ struct ChaseCamera {
 
     mutating func addImpulse(_ v: SIMD3<Float>) {
         let capped = SIMD3(
-            max(-1.0, min(1.0, v.x)),
-            max(-1.0, min(1.0, v.y)),
-            max(-1.0, min(1.0, v.z))
+            max(-0.8, min(0.8, v.x)),
+            max(-0.8, min(0.8, v.y)),
+            max(-0.8, min(0.8, v.z))
         )
         impulse += capped
         impulse = SIMD3(
-            max(-1.5, min(1.5, impulse.x)),
-            max(-1.5, min(1.5, impulse.y)),
-            max(-1.5, min(1.5, impulse.z))
+            max(-1.2, min(1.2, impulse.x)),
+            max(-1.2, min(1.2, impulse.y)),
+            max(-1.2, min(1.2, impulse.z))
         )
     }
 
     mutating func update(
         follow target: SIMD3<Float>,
         waveHeight: Float,
-        /// Water height under the intended eye XZ — used to stay above the crest.
+        /// Water height under the intended eye XZ — stay clearly above the lip.
         eyeWaterHeight: Float,
         lean: Float,
         shake: Float,
@@ -55,13 +55,13 @@ struct ChaseCamera {
         deltaTime: Float
     ) {
         var desired = target + eyeOffset
-        // Follow target water, but never dunk under local crest water at the eye.
-        let clearance: Float = 3.8
+        // Always clear the crest by a wide margin — hero shot from above the lip.
+        let clearance: Float = 5.5
         let fromTarget = waveHeight + eyeOffset.y
         let fromEye = eyeWaterHeight + clearance
         desired.y = max(fromTarget, fromEye)
-        desired.x += lean * 1.35
-        desired.y += shake * 1.0
+        desired.x += lean * 1.1
+        desired.y += shake * 0.8
         desired += impulse
         impulse *= max(0, 1 - deltaTime * 9)
 
@@ -70,27 +70,26 @@ struct ChaseCamera {
             initialized = true
         }
 
-        let blend = min(1, deltaTime * 7.0)
+        let blend = min(1, deltaTime * 7.5)
         smoothEye += (desired - smoothEye) * blend
-        // Hard clamp each frame so lag never leaves us buried in the face.
-        let minEyeY = eyeWaterHeight + clearance * 0.85
+        let minEyeY = eyeWaterHeight + clearance
         if smoothEye.y < minEyeY {
             smoothEye.y = minEyeY
         }
 
-        let targetRoll = lean * 0.04
-        rollBias += (targetRoll - rollBias) * min(1, deltaTime * 5.5)
+        let targetRoll = lean * 0.035
+        rollBias += (targetRoll - rollBias) * min(1, deltaTime * 5)
         let speedT = saturate((speed - 17) / 17)
-        let targetBoost: Float = speedT * 4.5
-        speedFovBoost += (targetBoost - speedFovBoost) * min(1, deltaTime * 2.8)
-        fovDegrees = 68 + speedFovBoost
+        let targetBoost: Float = speedT * 3.5
+        speedFovBoost += (targetBoost - speedFovBoost) * min(1, deltaTime * 2.5)
+        fovDegrees = 62 + speedFovBoost
 
         if shake > 0.01 {
-            let s = shake * shake * 0.55
+            let s = shake * shake * 0.45
             shakeOffset = SIMD3(
-                Float.random(in: -0.16...0.16) * s,
                 Float.random(in: -0.12...0.12) * s,
-                Float.random(in: -0.1...0.1) * s
+                Float.random(in: -0.1...0.1) * s,
+                Float.random(in: -0.08...0.08) * s
             )
         } else {
             shakeOffset *= 0.65
@@ -101,7 +100,7 @@ struct ChaseCamera {
 
     func viewMatrix(follow target: SIMD3<Float>) -> matrix_float4x4 {
         let eye = smoothEye + shakeOffset
-        let look = target + lookAhead + shakeOffset * 0.25
+        let look = target + lookAhead + shakeOffset * 0.2
         var view = Math.lookAt(eye: eye, target: look, up: SIMD3(0, 1, 0))
         if abs(rollBias) > 0.0001 {
             view = Math.rotation(radians: rollBias, axis: SIMD3(0, 0, 1)) * view

@@ -20,7 +20,7 @@ constant float3 kSkyHorizon = float3(1.0, 0.478, 0.235);
 constant float3 kSkyZenith = float3(0.169, 0.227, 0.404);
 /// #FFE8B0
 constant float3 kSunDiskColor = float3(1.0, 0.910, 0.690);
-constant float kSunDiskIntensity = 2.8;
+constant float kSunDiskIntensity = 2.0;
 
 /// Analytic procedural sky for a world-space view/reflection direction.
 static inline float3 evaluateProceduralSky(float3 dir,
@@ -40,11 +40,11 @@ static inline float3 evaluateProceduralSky(float3 dir,
     col = mix(col, kSkyHorizon * 1.55, saturate(horizonBand * 0.65 + glowBand * 0.55));
 
     float disk = pow(sunDot, 220.0);
-    float softHalo = pow(sunDot, 18.0) * 2.2 + pow(sunDot, 6.0) * 0.7;
+    float softHalo = pow(sunDot, 18.0) * 1.4 + pow(sunDot, 6.0) * 0.4;
     float3 sunDisc = kSunDiskColor * kSunDiskIntensity;
     col += sunDisc * disk;
-    col += sunDisc * softHalo * 0.08;
-    col += lightColor * sunIntensity * softHalo * 0.15;
+    col += sunDisc * softHalo * 0.05;
+    col += lightColor * sunIntensity * softHalo * 0.08;
     return col;
 }
 

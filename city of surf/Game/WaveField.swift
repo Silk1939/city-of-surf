@@ -14,18 +14,18 @@
 import simd
 
 struct WaveField {
-    /// Tall flood crest — keep in sync with ChaseCamera eyeOffset / lookAhead.
-    var amplitude: Float = 7.0
-    var faceWidth: Float = 14.0
+    /// Readable flood crest — co-scaled with ChaseCamera hero framing (eye Y≈13.5).
+    var amplitude: Float = 4.2
+    var faceWidth: Float = 16.0
     var speed: Float = 16.0
-    /// Soft enough that the face reads as a slope, not a camera-eating wall.
-    var steepness: Float = 0.78
+    /// Soft rolling face — steep walls fill the FOV as a flat cyan slab.
+    var steepness: Float = 0.55
     var direction: SIMD2<Float> = SIMD2(0, 1)
-    /// Visible travelling chop on the face.
-    var rippleAmplitude: Float = 0.48
-    var rippleLength: Float = 5.5
-    /// Surfer on the front face; crest rises behind — keep eyeOffset.z behind this.
-    var crestShift: Float = 3.4
+    /// Visible travelling chop without turning mid-water into noise soup.
+    var rippleAmplitude: Float = 0.32
+    var rippleLength: Float = 6.5
+    /// Surfer on front face; crest lip behind (~faceWidth*0.25).
+    var crestShift: Float = 4.0
 
     var wavelength: Float {
         get { faceWidth }
@@ -60,28 +60,28 @@ struct WaveField {
         var d = SIMD3<Float>(0, 0, 0)
 
         // Base bore + raised crest
-        d.y = a * (0.85 * body + 0.68 * q * lip)
+        d.y = a * (0.80 * body + 0.72 * q * lip)
 
-        // Gerstner-style pinch toward the crest
+        // Gentler Gerstner pinch — hard pinch + tall amp → camera-facing slab.
         let pinch = (rz / sigma) * lip
-        d.z -= q * sigma * 0.95 * pinch
+        d.z -= q * sigma * 0.55 * pinch
 
-        // Plunging throw at the very top of the lip
-        d.z += q * a * 0.20 * lip * lip
-        d.y += q * a * 0.12 * lip * lip
+        // Soft lip lift
+        d.z += q * a * 0.10 * lip * lip
+        d.y += q * a * 0.18 * lip * lip
 
         // Pile-up against the canyon walls
         let wall = smoothstepf(4.5, 8.5, abs(x))
-        d.y += a * 0.18 * wall * body
+        d.y += a * 0.14 * wall * body
 
-        // Secondary long swell (synced with Shaders.metal) — readable volume, not flicker
+        // Secondary long swell (synced with Shaders.metal)
         let swellPhase = rz * (2.0 * Float.pi / 28.0) - time * 1.35
-        d.y += a * 0.14 * body * sin(swellPhase)
-        d.z += a * 0.04 * body * cos(swellPhase)
+        d.y += a * 0.12 * body * sin(swellPhase)
+        d.z += a * 0.03 * body * cos(swellPhase)
 
         // Cross-chop (different direction) — mid wavelength
         let crossPhase = (x * 0.22 + rz * 0.08) - time * 1.9
-        d.y += a * 0.06 * body * sin(crossPhase)
+        d.y += a * 0.045 * body * sin(crossPhase)
 
         // Three octaves of travelling chop
         let rk = (2.0 * Float.pi) / max(rippleLength, 0.001)
@@ -90,7 +90,7 @@ struct WaveField {
         let p2 = rk * 0.53 * (x * -1.7 + rz * 1.3) - time * 2.3 + 1.7
         let p3 = rk * 1.90 * (x * 2.6 + rz * -0.4) - time * 4.7 + 4.1
         d.y += chopAmp * (0.50 * sin(p1) + 0.35 * sin(p2) + 0.15 * sin(p3))
-        d.x += chopAmp * 0.45 * cos(p1)
+        d.x += chopAmp * 0.35 * cos(p1)
 
         return d
     }
@@ -103,9 +103,9 @@ struct WaveField {
         let body = floodBody(rz)
         let lip = crestLip(rz)
         let dpinch = (1.0 - (rz * rz) / (sigma * sigma)) * lip / sigma
-        let jac = 1.0 - steepness * sigma * 0.95 * dpinch
+        let jac = 1.0 - steepness * sigma * 0.55 * dpinch
         let faceMask = body * (1.0 - body) * 4.0
-        return min(max(1.35 * lip + 0.50 * faceMask + max(0.6 - jac, 0) * 1.3, 0), 1)
+        return min(max(1.45 * lip + 0.55 * faceMask + max(0.55 - jac, 0) * 1.1, 0), 1)
     }
 
     /// Displacement whose displaced Z lands on `z` (visual surface).

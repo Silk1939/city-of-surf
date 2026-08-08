@@ -99,28 +99,28 @@ static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread f
     float3 d = float3(0.0);
 
     // Base bore + raised crest
-    d.y = a * (0.85 * body + 0.68 * Q * lip);
+    d.y = a * (0.80 * body + 0.72 * Q * lip);
 
-    // Gerstner-style pinch toward the crest → steep concave face; Q>~1.05 plunges.
+    // Gentler Gerstner pinch — hard pinch + tall amp → camera-facing slab + sawtooth lip.
     float pinch = (rz / sigma) * lip;
-    d.z -= Q * sigma * 0.95 * pinch;
+    d.z -= Q * sigma * 0.55 * pinch;
 
-    // Throw the lip slightly forward and up (plunging feel)
-    d.z += Q * a * 0.20 * lip * lip;
-    d.y += Q * a * 0.12 * lip * lip;
+    // Soft lip lift (readable crest without plunging fold)
+    d.z += Q * a * 0.10 * lip * lip;
+    d.y += Q * a * 0.18 * lip * lip;
 
     // Water piles up against canyon walls
     float wall = smoothstep(4.5, 8.5, abs(pos.x));
-    d.y += a * 0.18 * wall * body;
+    d.y += a * 0.14 * wall * body;
 
     // Secondary long swell (synced with WaveField)
     float swellPhase = rz * (2.0 * M_PI_F / 28.0) - t * 1.35;
-    d.y += a * 0.14 * body * sin(swellPhase);
-    d.z += a * 0.04 * body * cos(swellPhase);
+    d.y += a * 0.12 * body * sin(swellPhase);
+    d.z += a * 0.03 * body * cos(swellPhase);
 
     // Cross-chop mid wavelength
     float crossPhase = (pos.x * 0.22 + rz * 0.08) - t * 1.9;
-    d.y += a * 0.06 * body * sin(crossPhase);
+    d.y += a * 0.045 * body * sin(crossPhase);
 
     // Three octaves of travelling chop (synced with WaveField)
     float rk = (2.0 * M_PI_F) / max(frame.rippleLength, 0.001);
@@ -129,13 +129,13 @@ static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread f
     float p2 = rk * 0.53 * (pos.x * -1.7 + rz * 1.3) - t * 2.3 + 1.7;
     float p3 = rk * 1.90 * (pos.x * 2.6 + rz * -0.4) - t * 4.7 + 4.1;
     d.y += chopAmp * (0.50 * sin(p1) + 0.35 * sin(p2) + 0.15 * sin(p3));
-    d.x += chopAmp * 0.45 * cos(p1);
+    d.x += chopAmp * 0.35 * cos(p1);
 
-    // Jacobian of the pinch: compressing surface → whitewater
+    // Jacobian foam — milder pinch scale matches d.z above
     float dpinch = (1.0 - (rz * rz) / (sigma * sigma)) * lip / sigma;
-    float jac = 1.0 - Q * sigma * 0.95 * dpinch;
+    float jac = 1.0 - Q * sigma * 0.55 * dpinch;
     float faceMask = body * (1.0 - body) * 4.0;
-    foam = saturate(1.35 * lip + 0.50 * faceMask + saturate(0.6 - jac) * 1.3);
+    foam = saturate(1.45 * lip + 0.55 * faceMask + saturate(0.55 - jac) * 1.1);
 
     return pos + d;
 }
@@ -246,11 +246,11 @@ static float3 tonemapACES(float3 x)
 /// Warm height+distance fog → horizon orange (#FF7A3C). Never grey.
 static float3 applyHorizonFog(float3 hdr, float3 worldPos, float3 cameraPos)
 {
-    float3 fogColor = float3(1.0, 0.478, 0.235) * 0.95;
+    float3 fogColor = float3(1.0, 0.478, 0.235) * 0.72;
     float dist = length(worldPos - cameraPos);
-    float distFog = saturate((dist - 32.0) / 120.0);
-    float heightFog = saturate(1.0 - worldPos.y / 40.0);
-    float fogAmount = saturate(distFog * mix(0.35, 0.85, heightFog));
+    float distFog = saturate((dist - 40.0) / 140.0);
+    float heightFog = saturate(1.0 - worldPos.y / 48.0);
+    float fogAmount = saturate(distFog * mix(0.22, 0.65, heightFog));
     return mix(hdr, fogColor, fogAmount);
 }
 
@@ -661,19 +661,19 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float3 mid = float3(0.090, 0.500, 0.520);
     float3 shallow = float3(0.180, 0.769, 0.714);   // #2EC4B6
     float a = max(frame.waveAmplitude, 0.001);
-    float h = saturate(in.worldPos.y / (a * 1.35));
-    float3 water = mix(deep, mid, smoothstep(0.05, 0.50, h));
-    water = mix(water, shallow, smoothstep(0.45, 0.92, h));
+    float h = saturate(in.worldPos.y / (a * 1.15));
+    float3 water = mix(deep, mid, smoothstep(0.02, 0.45, h));
+    water = mix(water, shallow, smoothstep(0.40, 0.90, h));
 
-    // Thin flood film ahead of crest — keep tint dark so it doesn't read as a white road.
-    float3 roadTint = float3(0.06, 0.10, 0.12);
-    float filmDepth = saturate(in.worldPos.y / 1.4);
-    water = mix(roadTint, water, smoothstep(0.05, 0.85, filmDepth));
+    // Thin flood film ahead of crest — only very shallow water, keep teal dominant.
+    float3 roadTint = float3(0.05, 0.12, 0.14);
+    float filmDepth = saturate(in.worldPos.y / 0.9);
+    water = mix(roadTint, water, smoothstep(0.15, 0.95, filmDepth));
 
     float edge = saturate((abs(in.worldPos.x) - 4.5) / 6.5);
-    float edgeShade = mix(1.0, 0.72, edge * edge);
-    // Hemisphere ambient so shadowed face still reads teal.
-    water *= edgeShade * (0.38 + 0.42 * ndotl + 0.28 * (N.y * 0.5 + 0.5));
+    float edgeShade = mix(1.0, 0.78, edge * edge);
+    // Hemisphere ambient — keep face teal when lit from above (hero cam).
+    water *= edgeShade * (0.48 + 0.35 * ndotl + 0.30 * (N.y * 0.5 + 0.5));
 
     // Procedural sky reflection — tone down before mixing.
     // Grazing angles used to milk-out the whole face into grey/white.

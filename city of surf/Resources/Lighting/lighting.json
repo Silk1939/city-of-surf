@@ -1,16 +1,16 @@
 {
   "sunDirection": [
-    0.08,
-    0.28,
-    0.96
+    0.12,
+    0.42,
+    0.90
   ],
   "sunColor": [
     1.0,
     0.72,
     0.42
   ],
-  "sunIntensity": 2.2,
-  "iblIntensity": 0.65,
+  "sunIntensity": 1.85,
+  "iblIntensity": 0.55,
   "skyPeak": 19.75,
   "irradiancePeak": 19.75,
   "irradianceMapPeak": 1.5808300971984863,

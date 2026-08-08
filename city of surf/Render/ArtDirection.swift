@@ -46,26 +46,25 @@ enum ArtDirection {
     static let neonEmissiveMax: Float = 1.85
 
     // MARK: - Lighting / grade
-    /// Flat front-above sun — street runs +Z (camera looks down-canyon into the sun).
-    static let sunDirection = simd_normalize(SIMD3<Float>(0.08, 0.28, 0.96))
+    /// Slightly elevated sun — less looking straight into the disk down-canyon.
+    static let sunDirection = simd_normalize(SIMD3<Float>(0.12, 0.42, 0.90))
     static let sunColor = SIMD3<Float>(1.0, 0.72, 0.42)
-    /// Was 4.0 — crushed water + neon into white; keep orange/teal readable.
-    static let sunIntensity: Float = 2.2
-    static let iblIntensity: Float = 0.65
+    static let sunIntensity: Float = 1.85
+    static let iblIntensity: Float = 0.55
     /// Distance/height fog mixes toward horizon orange (never grey).
     static let fogWarm = skyHorizon
     /// Soft HDR sun disc scale in `skyFragment` / SkyCommon.h (keep in sync).
-    static let sunDiskIntensity: Float = 2.8
+    static let sunDiskIntensity: Float = 2.0
 
     /// Composite: exposure → bloom add → ACES → saturation → vignette.
-    static let exposure: Float = 0.58
-    static let saturation: Float = 1.16
+    static let exposure: Float = 0.48
+    static let saturation: Float = 1.18
     /// Max corner darkening (0.15 = 15%).
-    static let vignetteStrength: Float = 0.18
-    static let bloomThreshold: Float = 1.4
-    static let bloomSoftKnee: Float = 0.4
-    static let bloomIntensity: Float = 0.16
-    static let grainAmount: Float = 0.014
+    static let vignetteStrength: Float = 0.20
+    static let bloomThreshold: Float = 1.5
+    static let bloomSoftKnee: Float = 0.35
+    static let bloomIntensity: Float = 0.14
+    static let grainAmount: Float = 0.015
 
     /// Cycle warm/cool facade tints (sun vs shadow sides of the street).
     static func buildingTint(index: Int) -> SIMD3<Float> {
