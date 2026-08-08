@@ -73,6 +73,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     let boardMesh: MTKMesh
     let coinMesh: MTKMesh
     let proceduralSurfer: ProceduralSurferMeshes
+    let assetLibrary: AssetMeshLibrary
+    let obstacleMesh: MTKMesh
 
     private var lastTime: CFTimeInterval = CACurrentMediaTime()
 
