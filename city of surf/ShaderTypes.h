@@ -94,7 +94,8 @@ typedef struct
     simd_float4 color;
     float isWave;
     /// 0 default, 1 road/asphalt, 2 concrete (sidewalks), 3 surfer/neon, 4 obstacle,
-    /// 5 coin, 6 glass facade (buildings), 7 wet surfboard (glossy, non-emissive)
+    /// 5 coin, 6 glass facade (buildings), 7 wet surfboard (glossy, non-emissive),
+    /// 8 water spray / wake / mist (soft froth, no neon emissive)
     float materialId;
     float castsShadow;
     float receivesShadow;

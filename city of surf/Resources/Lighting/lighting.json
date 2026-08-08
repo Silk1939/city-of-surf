@@ -9,8 +9,8 @@
     0.72,
     0.42
   ],
-  "sunIntensity": 4.0,
-  "iblIntensity": 0.85,
+  "sunIntensity": 2.6,
+  "iblIntensity": 0.72,
   "skyPeak": 19.75,
   "irradiancePeak": 19.75,
   "irradianceMapPeak": 1.5808300971984863,

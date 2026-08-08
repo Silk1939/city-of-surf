@@ -17,13 +17,15 @@ enum ArtDirection {
     // MARK: - Water
     static let waterDeep = SIMD3<Float>(0.039, 0.227, 0.290)        // #0A3A4A
     static let waterMid = SIMD3<Float>(0.090, 0.500, 0.520)
-    /// SSS glow through crest lip (#2EC4B6 * intensity).
-    static let crestSSSIntensity: Float = 1.5
-    /// Narrow sun glitter HDR scale on water.
-    static let waterGlitterIntensity: Float = 2.5
+    static let waterShallow = SIMD3<Float>(0.180, 0.769, 0.714)     // #2EC4B6
+    static let foam = SIMD3<Float>(1.0, 0.965, 0.914)               // #FFF6E9
+    /// SSS glow through crest lip (#2EC4B6 * intensity) — keep ≤1.2 to avoid blowout.
+    static let crestSSSIntensity: Float = 1.05
+    /// Narrow sun glitter HDR scale on water (pre-tonemap, kept modest).
+    static let waterGlitterIntensity: Float = 1.15
     /// GPU-only detail wave amps (must stay small vs gameplay amplitude; not in WaveField).
-    static let waterDetailAmp0: Float = 0.12
-    static let waterDetailAmp1: Float = 0.07
+    static let waterDetailAmp0: Float = 0.28
+    static let waterDetailAmp1: Float = 0.14
 
     // MARK: - Buildings
     static let buildingSun = SIMD3<Float>(0.788, 0.635, 0.494)      // #C9A27E
@@ -39,30 +41,31 @@ enum ArtDirection {
     static let coinGold = SIMD3<Float>(1.0, 0.84, 0.15)
     static let windowGlow = SIMD3<Float>(1.0, 0.78, 0.35)
     /// Additive HDR emissive scales (linear, pre-tonemap) — bloom food.
-    static let windowGlowIntensity: Float = 2.0
-    static let neonEmissiveMin: Float = 2.0
-    static let neonEmissiveMax: Float = 3.0
+    static let windowGlowIntensity: Float = 1.6
+    static let neonEmissiveMin: Float = 1.15
+    static let neonEmissiveMax: Float = 1.85
 
     // MARK: - Lighting / grade
     /// Flat front-above sun — street runs +Z (camera looks down-canyon into the sun).
     static let sunDirection = simd_normalize(SIMD3<Float>(0.08, 0.28, 0.96))
     static let sunColor = SIMD3<Float>(1.0, 0.72, 0.42)
-    static let sunIntensity: Float = 4.0
-    static let iblIntensity: Float = 0.85
+    /// Was 4.0 — crushed water + neon into white; 2.6 keeps orange/teal readable.
+    static let sunIntensity: Float = 2.6
+    static let iblIntensity: Float = 0.72
     /// Distance/height fog mixes toward horizon orange (never grey).
     static let fogWarm = skyHorizon
-    /// Soft HDR sun disc scale in `skyFragment` (linear, pre-tonemap).
-    static let sunDiskIntensity: Float = 6.0
+    /// Soft HDR sun disc scale in `skyFragment` / SkyCommon.h (keep in sync).
+    static let sunDiskIntensity: Float = 3.8
 
     /// Composite: exposure → bloom add → ACES → saturation → vignette.
-    static let exposure: Float = 0.85
-    static let saturation: Float = 1.1
+    static let exposure: Float = 0.72
+    static let saturation: Float = 1.14
     /// Max corner darkening (0.15 = 15%).
-    static let vignetteStrength: Float = 0.15
-    static let bloomThreshold: Float = 1.2
-    static let bloomSoftKnee: Float = 0.5
-    static let bloomIntensity: Float = 0.22
-    static let grainAmount: Float = 0.012
+    static let vignetteStrength: Float = 0.16
+    static let bloomThreshold: Float = 1.35
+    static let bloomSoftKnee: Float = 0.45
+    static let bloomIntensity: Float = 0.18
+    static let grainAmount: Float = 0.014
 
     /// Cycle warm/cool facade tints (sun vs shadow sides of the street).
     static func buildingTint(index: Int) -> SIMD3<Float> {

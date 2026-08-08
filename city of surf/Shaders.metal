@@ -79,6 +79,7 @@ static float detail_height(float2 p, float t)
     float h = 0.0;
     h += valueNoise(p * 0.85 + float2(0.0, -t * 1.1)) * 0.60;
     h += valueNoise(p * 2.30 + float2(t * 0.4, -t * 2.2)) * 0.40;
+    h += valueNoise(p * 4.80 + float2(-t * 0.7, -t * 3.4)) * 0.22;
     return h;
 }
 
@@ -98,34 +99,43 @@ static float3 flood_displace(float3 pos, constant FrameUniforms &frame, thread f
     float3 d = float3(0.0);
 
     // Base bore + raised crest
-    d.y = a * (0.85 * body + 0.62 * Q * lip);
+    d.y = a * (0.85 * body + 0.68 * Q * lip);
 
     // Gerstner-style pinch toward the crest → steep concave face; Q>~1.05 plunges.
     float pinch = (rz / sigma) * lip;
     d.z -= Q * sigma * 0.95 * pinch;
 
     // Throw the lip slightly forward and up (plunging feel)
-    d.z += Q * a * 0.18 * lip * lip;
-    d.y += Q * a * 0.10 * lip * lip;
+    d.z += Q * a * 0.20 * lip * lip;
+    d.y += Q * a * 0.12 * lip * lip;
 
     // Water piles up against canyon walls
     float wall = smoothstep(4.5, 8.5, abs(pos.x));
-    d.y += a * 0.16 * wall * body;
+    d.y += a * 0.18 * wall * body;
+
+    // Secondary long swell (synced with WaveField)
+    float swellPhase = rz * (2.0 * M_PI_F / 28.0) - t * 1.35;
+    d.y += a * 0.14 * body * sin(swellPhase);
+    d.z += a * 0.04 * body * cos(swellPhase);
+
+    // Cross-chop mid wavelength
+    float crossPhase = (pos.x * 0.22 + rz * 0.08) - t * 1.9;
+    d.y += a * 0.06 * body * sin(crossPhase);
 
     // Three octaves of travelling chop (synced with WaveField)
     float rk = (2.0 * M_PI_F) / max(frame.rippleLength, 0.001);
-    float chopAmp = frame.rippleAmplitude * (0.25 + 0.75 * body);
+    float chopAmp = frame.rippleAmplitude * (0.30 + 0.70 * body);
     float p1 = rk * (pos.x * 0.8 + rz * 0.6) - t * 3.1;
     float p2 = rk * 0.53 * (pos.x * -1.7 + rz * 1.3) - t * 2.3 + 1.7;
     float p3 = rk * 1.90 * (pos.x * 2.6 + rz * -0.4) - t * 4.7 + 4.1;
     d.y += chopAmp * (0.50 * sin(p1) + 0.35 * sin(p2) + 0.15 * sin(p3));
-    d.x += chopAmp * 0.4 * cos(p1);
+    d.x += chopAmp * 0.45 * cos(p1);
 
     // Jacobian of the pinch: compressing surface → whitewater
     float dpinch = (1.0 - (rz * rz) / (sigma * sigma)) * lip / sigma;
     float jac = 1.0 - Q * sigma * 0.95 * dpinch;
     float faceMask = body * (1.0 - body) * 4.0;
-    foam = saturate(1.25 * lip + 0.45 * faceMask + saturate(0.6 - jac) * 1.2);
+    foam = saturate(1.35 * lip + 0.50 * faceMask + saturate(0.6 - jac) * 1.3);
 
     return pos + d;
 }
@@ -236,11 +246,11 @@ static float3 tonemapACES(float3 x)
 /// Warm height+distance fog → horizon orange (#FF7A3C). Never grey.
 static float3 applyHorizonFog(float3 hdr, float3 worldPos, float3 cameraPos)
 {
-    float3 fogColor = float3(1.0, 0.478, 0.235) * 1.15;
+    float3 fogColor = float3(1.0, 0.478, 0.235) * 0.95;
     float dist = length(worldPos - cameraPos);
-    float distFog = saturate((dist - 28.0) / 110.0);
-    float heightFog = saturate(1.0 - worldPos.y / 36.0);
-    float fogAmount = saturate(distFog * mix(0.45, 1.0, heightFog));
+    float distFog = saturate((dist - 32.0) / 120.0);
+    float heightFog = saturate(1.0 - worldPos.y / 40.0);
+    float fogAmount = saturate(distFog * mix(0.35, 0.85, heightFog));
     return mix(hdr, fogColor, fogAmount);
 }
 
@@ -498,6 +508,11 @@ fragment float4 solidFragment(VOut in [[stage_in]],
         albedo = in.color.rgb;
         roughness = 0.11;
         metallic = 0.35;
+    } else if (in.materialId > 7.5 && in.materialId < 8.5) {
+        // Water spray / wake / mist — soft froth, never neon-emissive
+        albedo = in.color.rgb;
+        roughness = 0.82;
+        metallic = 0.0;
     } else if (in.materialId > 3.5 && in.materialId < 4.5) {
         roughness = 0.45;
         metallic = 0.2;
@@ -542,23 +557,29 @@ fragment float4 solidFragment(VOut in [[stage_in]],
     if (in.materialId > 2.5 && in.materialId < 3.5) {
         float rim = pow(1.0 - saturate(dot(N, V)), 2.0);
         float3 rimCol = mix(float3(0.220, 0.898, 1.0), in.color.rgb, 0.45); // neon cyan
-        color += rimCol * rim * 3.0; // ArtDirection.neonEmissiveMax
-        color += in.color.rgb * 2.0; // ArtDirection.neonEmissiveMin
+        color += rimCol * rim * 1.85; // ArtDirection.neonEmissiveMax
+        color += in.color.rgb * 1.15; // ArtDirection.neonEmissiveMin
     }
     if (in.materialId > 6.5 && in.materialId < 7.5) {
         // Wet deck sparkle — narrow, secondary to sun (not bloom food).
         float glint = pow(saturate(dot(N, normalize(L + V))), 96.0);
-        color += float3(0.85, 0.95, 1.0) * glint * 2.4;
+        color += float3(0.85, 0.95, 1.0) * glint * 1.6;
         float fres = pow(1.0 - saturate(dot(N, V)), 3.0);
-        color += float3(0.35, 0.55, 0.65) * fres * 0.45;
+        color += float3(0.35, 0.55, 0.65) * fres * 0.35;
+    }
+    if (in.materialId > 7.5 && in.materialId < 8.5) {
+        // Soft spray: slight bright rim, no HDR flood
+        float fres = pow(1.0 - saturate(dot(N, V)), 2.2);
+        color += float3(0.75, 0.90, 0.95) * fres * 0.35;
+        color = min(color, float3(1.35));
     }
     if (in.materialId > 4.5 && in.materialId < 5.5) {
         float pulse = 0.55 + 0.45 * sin(frame.time * 7.0 + in.worldPos.x * 2.0);
-        color += in.color.rgb * pulse * 4.0;
+        color += in.color.rgb * pulse * 2.4;
         float rim = pow(1.0 - saturate(dot(N, V)), 1.4);
-        color += float3(1.0, 0.92, 0.35) * rim * 3.0;
+        color += float3(1.0, 0.92, 0.35) * rim * 1.8;
         float glint = pow(saturate(dot(N, normalize(L + V))), 64.0);
-        color += float3(1.0, 0.95, 0.6) * glint * 5.5;
+        color += float3(1.0, 0.95, 0.6) * glint * 3.2;
     }
     // Traffic-light / hazard / billboard neon (magenta/cyan sparingly)
     if (in.materialId > 3.5 && in.materialId < 4.5) {
@@ -566,7 +587,7 @@ fragment float4 solidFragment(VOut in [[stage_in]],
                      - min(in.color.r, min(in.color.g, in.color.b));
         if (chroma > 0.35) {
             float pulse = 0.7 + 0.3 * sin(frame.time * 8.0);
-            color += in.color.rgb * pulse * 3.0; // ArtDirection.neonEmissiveMax
+            color += in.color.rgb * pulse * 1.85; // ArtDirection.neonEmissiveMax
         }
     }
 
@@ -581,6 +602,9 @@ vertex VOut waveVertex(Vertex in [[stage_in]],
     float4 worldBase = object.modelMatrix * float4(in.position, 1.0);
     float foam = 0.0;
     float3 displaced = flood_displace(worldBase.xyz, frame, foam);
+    // GPU-only micro detail (visual) — does not affect WaveField gameplay samples.
+    float detail = detail_height(worldBase.xz, frame.time);
+    displaced.y += detail * 0.26;
     out.basePos = worldBase.xyz;
     out.worldPos = displaced;
     out.position = frame.viewProjectionMatrix * float4(displaced, 1.0);
@@ -622,14 +646,15 @@ fragment float4 waveFragment(VOut in [[stage_in]],
         float hX = detail_height(in.basePos.xz + float2(de, 0), t);
         float hZ = detail_height(in.basePos.xz + float2(0, de), t);
         float2 grad = float2(hC - hX, hC - hZ) / de;
-        N = normalize(N + float3(grad.x, 0.0, grad.y) * 0.20 * detailFade);
+        N = normalize(N + float3(grad.x, 0.0, grad.y) * 0.32 * detailFade);
     }
 
     float NdotV = saturate(dot(N, V));
     float ndotl = saturate(dot(N, L));
 
-    // Schlick fresnel (F0 of water ≈ 0.02)
-    float fresnel = 0.02 + 0.98 * pow(1.0 - NdotV, 5.0);
+    // Schlick fresnel (F0 of water ≈ 0.02) — capped so sky never whites out the face.
+    float fresnel = 0.02 + 0.78 * pow(1.0 - NdotV, 5.0);
+    fresnel = min(fresnel, 0.72);
 
     // Body: deep teal → shallow turquoise by height (art-direction palette).
     float3 deep = float3(0.039, 0.227, 0.290);      // #0A3A4A
@@ -637,47 +662,57 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float3 shallow = float3(0.180, 0.769, 0.714);   // #2EC4B6
     float a = max(frame.waveAmplitude, 0.001);
     float h = saturate(in.worldPos.y / (a * 1.35));
-    float3 water = mix(deep, mid, smoothstep(0.05, 0.55, h));
-    water = mix(water, shallow, smoothstep(0.55, 0.95, h));
+    float3 water = mix(deep, mid, smoothstep(0.05, 0.50, h));
+    water = mix(water, shallow, smoothstep(0.45, 0.92, h));
 
-    // Thin flood film: asphalt reads through shallow water ahead of the crest.
-    float3 roadTint = float3(0.14, 0.13, 0.145);
-    float filmDepth = saturate(in.worldPos.y / 0.8);
-    water = mix(roadTint * 0.55, water, filmDepth);
+    // Thin flood film ahead of crest — keep tint dark so it doesn't read as a white road.
+    float3 roadTint = float3(0.06, 0.10, 0.12);
+    float filmDepth = saturate(in.worldPos.y / 1.4);
+    water = mix(roadTint, water, smoothstep(0.05, 0.85, filmDepth));
 
     float edge = saturate((abs(in.worldPos.x) - 4.5) / 6.5);
-    float edgeShade = mix(1.0, 0.78, edge * edge);
-    water *= edgeShade * (0.45 + 0.55 * ndotl);
+    float edgeShade = mix(1.0, 0.72, edge * edge);
+    // Hemisphere ambient so shadowed face still reads teal.
+    water *= edgeShade * (0.38 + 0.42 * ndotl + 0.28 * (N.y * 0.5 + 0.5));
 
-    // Procedural sky reflection (shared SkyCommon) — warm horizon orange.
+    // Procedural sky reflection — tone down before mixing.
     float3 R = reflect(-V, N);
     float3 skyCol = evaluateProceduralSky(R, frame.lightDirection, frame.lightColor, frame.sunIntensity);
-    float sunSpot = pow(saturate(dot(R, L)), 320.0);
-    water = mix(water, skyCol, fresnel);
+    skyCol = min(skyCol, float3(2.2));
+    float sunSpot = pow(saturate(dot(R, L)), 280.0);
+    water = mix(water, skyCol * 0.85, fresnel * 0.85);
 
-    // Subsurface scattering: crest glows turquoise when backlit.
+    // Subsurface scattering: crest glows turquoise when backlit (ArtDirection.crestSSSIntensity≈1.05).
     float sss = pow(saturate(dot(V, -L) * 0.5 + 0.5), 2.5) * pow(h, 2.0);
-    water += float3(0.180, 0.769, 0.714) * 1.5 * sss; // ArtDirection.crestSSSIntensity
+    water += float3(0.180, 0.769, 0.714) * 1.05 * sss;
 
-    // Foam: noise only breaks up the mask (never darkens water). Hard gate on foamAmt.
+    // Foam: chunky crest whitewater — readable lip without blown-out white sheet.
     float foamAmt = in.foam;
     float streak = valueNoise(in.basePos.xz * float2(0.55, 0.16) + float2(0.0, -t * 1.6));
-    float foamMask = smoothstep(0.55, 0.80, foamAmt * (0.65 + 0.35 * streak));
-    foamMask *= step(0.15, foamAmt);   // no foam on calm film water
-    float3 foamCol = float3(1.0, 0.965, 0.914); // #FFF6E9 — always bright, never brown
+    float chunk = valueNoise(in.basePos.xz * float2(1.4, 0.35) + float2(t * 0.2, -t * 2.4));
+    float foamMask = smoothstep(0.38, 0.72, foamAmt * (0.55 + 0.30 * streak + 0.25 * chunk));
+    foamMask *= step(0.10, foamAmt);
+    // Keep crest foam denser on the lip, thinner on face whitewater.
+    foamMask = saturate(foamMask * (0.75 + 0.55 * foamAmt));
+    foamMask = min(foamMask, 0.88);
+    float3 foamCol = mix(shallow * 1.25, float3(0.94, 0.97, 0.95), 0.72);
     water = mix(water, foamCol, foamMask);
 
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
-    irr = mix(irr, irr * kSkyHorizon * 1.3, 0.5);
-    water += irr * 0.035 * frame.iblIntensity;
+    irr = mix(irr, irr * kSkyHorizon * 1.15, 0.45);
+    water += irr * 0.028 * frame.iblIntensity;
 
-    // Sun specular: tight up close, broader + dimmer far away (no gold glitter).
+    // Sun specular: tight, intensity-scaled, hard-capped (no gold glitter blowout).
     float3 H = normalize(L + V);
-    float specPow = mix(60.0, 380.0, detailFade);
+    float specPow = mix(48.0, 280.0, detailFade);
     float spec = pow(saturate(dot(N, H)), specPow);
-    spec = min(spec * (0.2 + 0.8 * fresnel) * (0.15 + 2.2 * detailFade), 1.6);
-    water += frame.lightColor * frame.sunIntensity * spec * 0.55 * edgeShade * (1.0 - foamMask * 0.6);
-    water += frame.lightColor * sunSpot * fresnel * 0.55 * (1.0 - foamMask);
+    spec = min(spec * (0.2 + 0.8 * fresnel) * (0.15 + 1.6 * detailFade), 0.85);
+    float sunScale = min(frame.sunIntensity, 3.0);
+    water += frame.lightColor * sunScale * spec * 0.28 * edgeShade * (1.0 - foamMask * 0.7);
+    water += frame.lightColor * sunSpot * fresnel * 0.22 * (1.0 - foamMask);
+
+    // Hard ceiling before fog — keeps ACES from crushing everything to white milk.
+    water = min(water, float3(2.8));
 
     return float4(applyHorizonFog(water, in.worldPos, frame.cameraPosition), 1.0);
 }

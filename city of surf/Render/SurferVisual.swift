@@ -124,9 +124,11 @@ struct SurferVisual {
     ) {
         let sp = surfer.position
         let sh = surfer.currentHeight
-        let leanRot = Math.rotation(radians: rootLean * 0.35, axis: SIMD3(0, 0, 1))
+        // Lean from carve + soft water-surface roll/pitch so the silhouette rides the face.
+        let leanRot = Math.rotation(radians: rootLean * 0.28 + surfer.surfaceRoll * 0.55, axis: SIMD3(0, 0, 1))
+        let pitchRot = Math.rotation(radians: surfer.surfacePitch * 0.65, axis: SIMD3(1, 0, 0))
         // Match previous visual center: position is collision center; figure stands on board below.
-        let root = Math.translation(SIMD3(sp.x, sp.y - sh * 0.42, sp.z)) * leanRot
+        let root = Math.translation(SIMD3(sp.x, sp.y - sh * 0.42, sp.z)) * leanRot * pitchRot
 
         let suit = SIMD4<Float>(0.10, 0.10, 0.11, 1)
         let skin = SIMD4<Float>(0.72, 0.48, 0.36, 1)

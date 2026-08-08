@@ -89,6 +89,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     let unitBox: MTKMesh
     let waveMesh: MTKMesh
     let coinMesh: MTKMesh
+    /// Soft ellipsoid for wake / spray / mist (material 8).
+    let sprayMesh: MTKMesh
     let surferMeshes: SurferMeshes
     let surfboardMeshes: SurfboardMeshes
     let cityKitMeshes: CityKitMeshes
@@ -383,12 +385,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 vertexDescriptor: vd
             )
             // Pinch compresses Z — denser segments along the street; X can be coarser.
+            let waterQ = quality.water
             waveMesh = try MeshFactory.makePlane(
                 device: device,
                 width: 30,
                 depth: 140,
-                segmentsX: 48,
-                segmentsZ: 280,
+                segmentsX: waterQ.waveSegmentsX,
+                segmentsZ: waterQ.waveSegmentsZ,
                 vertexDescriptor: vd
             )
             // Upright thin disk (Y axis) — spun around Y like classic pickup coins.
@@ -398,6 +401,13 @@ final class Renderer: NSObject, MTKViewDelegate {
                 radius: 0.55,
                 radialSegments: 20,
                 verticalSegments: 1,
+                vertexDescriptor: vd
+            )
+            sprayMesh = try MeshFactory.makeSphere(
+                device: device,
+                radii: SIMD3(0.5, 0.5, 0.5),
+                radialSegments: 10,
+                verticalSegments: 8,
                 vertexDescriptor: vd
             )
             surferMeshes = try SurferMeshes.make(device: device, vertexDescriptor: vd)
@@ -419,7 +429,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         rs.addAllocations(shadowMap.allTextures)
         residentHDRTextures = hdrPipeline.allTextures
         rs.addAllocations(residentHDRTextures)
-        for mesh in [unitBox, waveMesh, coinMesh]
+        for mesh in [unitBox, waveMesh, coinMesh, sprayMesh]
             + surferMeshes.allMeshes
             + surfboardMeshes.allMeshes
             + cityKitMeshes.allMeshes
@@ -441,13 +451,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         residencySet = rs
 
         super.init()
+        gameState.waterQuality = quality.water
         gameState.reset()
         gameState.debugRendererReady = true
         gameState.debugKTXLoaded = true
         gameState.debugIBLPeak = ibl.config.irradiancePeak
         gameState.debugShadowActive = true
         updateTextureMemoryEstimate(gameState: gameState)
-        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) HDR=\(hdrPipeline.width)x\(hdrPipeline.height) bloomChain=\(enableBloomChain) FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
+        print("Renderer OK: IBL peak=\(ibl.config.irradiancePeak) shadow=\(shadowMap.size) HDR=\(hdrPipeline.width)x\(hdrPipeline.height) bloomChain=\(enableBloomChain) waterSeg=\(quality.water.waveSegmentsX)x\(quality.water.waveSegmentsZ) FrameUniforms=\(MemoryLayout<FrameUniforms>.size)")
 #endif
     }
 
@@ -726,47 +737,51 @@ final class Renderer: NSObject, MTKViewDelegate {
             )
         )
 
-        // Wake spray — directional stylized streaks (instanced capsules via unitBox stretch).
-        let wakeStart = instanceStreamer.nextIndex
-        let spWake = state.surfer.position
-        let leanWake = state.surfer.lean
-        for w in 0..<7 {
-            let t = Float(w) * 0.16
-            let wobble = sin(state.time * 16 + Float(w) * 1.9)
-            let side = (w % 2 == 0 ? -1.0 : 1.0) * (0.25 + t * 0.35)
-            let wakePos = SIMD3(
-                spWake.x + side + wobble * 0.2 + leanWake * 0.15,
-                spWake.y - state.surfer.currentHeight * 0.42 + 0.08 + Float(w) * 0.03,
-                spWake.z - 0.9 - t * 2.8
-            )
-            let len: Float = 0.55 - Float(w) * 0.05
-            let model = Math.translation(wakePos)
-                * Math.rotation(radians: leanWake * 0.2, axis: SIMD3(0, 0, 1))
-                * Math.scale(SIMD3(0.18 + t * 0.08, 0.12, len))
+        // Wake / spray / mist — soft ellipsoids (material 8); coin sparks stay neon (material 3).
+        let waterFXStart = instanceStreamer.nextIndex
+        let qScale = quality.water.particleScale * quality.particleScale
+        for spark in state.fx.sparks where spark.kind != .spark {
+            let lifeT = max(0, spark.life / max(spark.maxLife, 0.001))
+            let fade = lifeT * lifeT * (3 - 2 * lifeT)
+            let sc = spark.scale * (0.45 + 0.55 * fade) * qScale
+            let teal = SIMD4<Float>(0.18, 0.72, 0.70, 1)
+            let t = fade * 0.85 + 0.15
+            var col = teal * (1 - t) + spark.color * t
+            if spark.kind == .mist {
+                col = SIMD4(col.x * 0.88, col.y * 0.94, col.z * 0.96, 1)
+            }
+            let stretch = spark.stretch * sc
             _ = instanceStreamer.append(
-                modelMatrix: model,
-                color: SIMD4(0.96, 0.98, 1.0, 1),
+                modelMatrix: Math.translation(spark.position) * Math.scale(stretch),
+                color: col,
+                materialId: 8,
+                castsShadow: false,
+                receivesShadow: false
+            )
+        }
+        if instanceStreamer.nextIndex > waterFXStart {
+            instanceStreamer.closeBatch(
+                mesh: sprayMesh, start: waterFXStart, materialId: 8, castsShadow: false, receivesShadow: false
+            )
+        }
+
+        let sparkStart = instanceStreamer.nextIndex
+        for spark in state.fx.sparks where spark.kind == .spark {
+            let lifeT = max(0, spark.life / max(spark.maxLife, 0.001))
+            let fade = lifeT * lifeT * (3 - 2 * lifeT)
+            let sc = spark.scale * (0.45 + 0.55 * fade) * qScale
+            _ = instanceStreamer.append(
+                modelMatrix: Math.translation(spark.position) * Math.scale(SIMD3(sc, sc, sc)),
+                color: spark.color,
                 materialId: 3,
                 castsShadow: false,
                 receivesShadow: false
             )
         }
-        instanceStreamer.closeBatch(
-            mesh: unitBox, start: wakeStart, materialId: 3, castsShadow: false, receivesShadow: false
-        )
-
-        for spark in state.fx.sparks {
-            let lifeT = max(0, spark.life / spark.maxLife)
-            let sc = spark.scale * (0.55 + 0.45 * lifeT) * quality.particleScale
-            items.append(DrawItem(
-                mesh: unitBox,
-                modelMatrix: Math.translation(spark.position) * Math.scale(SIMD3(sc, sc, sc)),
-                color: spark.color,
-                isWave: false,
-                materialId: 3,
-                castsShadow: false,
-                receivesShadow: false
-            ))
+        if instanceStreamer.nextIndex > sparkStart {
+            instanceStreamer.closeBatch(
+                mesh: sprayMesh, start: sparkStart, materialId: 3, castsShadow: false, receivesShadow: false
+            )
         }
 
         // Coins — instanced
@@ -971,13 +986,13 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         // Short camera impulses — landing / style / wipeout (no permanent shake).
         if lastSurferPose == .jumping && state.surfer.pose == .standing && !state.isGameOver {
-            camera.addImpulse(SIMD3(0, -0.55, 0.15))
+            camera.addImpulse(SIMD3(0, -0.42, 0.12))
         }
         if state.stylePulse > 0.85 && lastStylePulse <= 0.85 {
-            camera.addImpulse(SIMD3(0, 0.25, -0.2))
+            camera.addImpulse(SIMD3(0, 0.18, -0.15))
         }
         if state.isGameOver && !lastWasGameOver {
-            camera.addImpulse(SIMD3(0, 0.8, 0.4))
+            camera.addImpulse(SIMD3(0, 0.55, 0.28))
         }
         lastSurferPose = state.surfer.pose
         lastStylePulse = state.stylePulse

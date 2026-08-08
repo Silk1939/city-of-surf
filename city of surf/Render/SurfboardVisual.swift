@@ -54,7 +54,7 @@ struct SurfboardMeshes {
 }
 
 enum SurfboardVisual {
-    /// Build board draws under the surfer. Pitch/roll react to carve / jump / landing.
+    /// Build board draws under the surfer. Pitch/roll follow water + carve / jump.
     static func appendDrawItems(
         to items: inout [DrawItem],
         meshes: SurfboardMeshes,
@@ -67,20 +67,21 @@ enum SurfboardVisual {
 
         let lean = poseWeights.lean
         let jumpT = poseWeights.jumpT
-        // Carve roll + slight nose pitch while airborne / compress on landing.
-        var roll = lean * 0.42
-        var pitch: Float = 0.04
+        // Water-aligned base + pose accents.
+        var roll = surfer.surfaceRoll
+        var pitch = surfer.surfacePitch + 0.03
         if surfer.pose == .jumping {
             if jumpT < 0.12 {
-                pitch = 0.18 // anticipate: nose up slightly
+                pitch += 0.16 // anticipate: nose up slightly
                 roll *= 0.6
             } else if jumpT > 0.82 {
-                pitch = -0.22 // landing: slap flat
+                pitch += -0.18 // landing: slap flat
             } else {
-                pitch = -0.08 + sin(jumpT * .pi) * 0.12
+                pitch += -0.06 + sin(jumpT * .pi) * 0.10
+                roll *= 0.45
             }
         } else if poseWeights.isDuck {
-            pitch = 0.12
+            pitch += 0.10
             roll *= 0.75
         } else if poseWeights.isWipeout {
             pitch = 0.55
@@ -199,3 +200,4 @@ enum SurfboardVisual {
         return 1 - (surfer.poseTimer / SurferController.jumpDuration)
     }
 }
+

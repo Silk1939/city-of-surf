@@ -43,6 +43,10 @@ final class GameState: ObservableObject {
     var obstacles = ObstacleSystem()
     var coinSystem = CoinSystem()
     var fx = FXSystem()
+    /// Set by Renderer when jump→standing; consumed once in update.
+    var pendingLandingSplash = false
+    /// Particle rate / cap from QualitySettings.water (wired by Renderer).
+    var waterQuality = WaterQualityProfile.high
 
     private(set) var time: Float = 0
     private(set) var runDistance: Float = 0
@@ -51,6 +55,7 @@ final class GameState: ObservableObject {
     private(set) var bonusScore: Int = 0
     private var comboTimer: Float = 0
     private var lastStyleObstacleZ: Float = -9999
+    private var prevSurferPose: SurferPose = .standing
 
     let baseSpeed: Float = 17
     let maxSpeed: Float = 34
@@ -74,6 +79,9 @@ final class GameState: ObservableObject {
         obstacles.reset()
         coinSystem.reset()
         fx.reset()
+        fx.maxParticles = waterQuality.maxParticles
+        pendingLandingSplash = false
+        prevSurferPose = .standing
     }
 
     func steer(toWorldX x: Float) {
@@ -90,14 +98,16 @@ final class GameState: ObservableObject {
     }
 
     func update(deltaTime: Float) {
-        fx.update(deltaTime: deltaTime)
-        if stylePulse > 0 {
-            stylePulse = max(0, stylePulse - deltaTime * 2.8)
-        }
+        fx.maxParticles = waterQuality.maxParticles
 
         if isGameOver {
+            fx.update(deltaTime: deltaTime)
             wipeoutShake = max(0, wipeoutShake - deltaTime * 2.5)
             return
+        }
+
+        if stylePulse > 0 {
+            stylePulse = max(0, stylePulse - deltaTime * 2.8)
         }
 
         time += deltaTime
@@ -114,7 +124,25 @@ final class GameState: ObservableObject {
             }
         }
 
+        let wasJumping = surfer.pose == .jumping
         surfer.update(deltaTime: deltaTime, wave: wave, time: time, scrollZ: scrollZ)
+        let justLanded = wasJumping && surfer.pose == .standing
+        if justLanded { pendingLandingSplash = true }
+
+        let landed = pendingLandingSplash
+        pendingLandingSplash = false
+        fx.updateSurfing(
+            deltaTime: deltaTime,
+            surfer: surfer,
+            wave: wave,
+            time: time,
+            scrollZ: scrollZ,
+            speed: speed,
+            justLanded: landed,
+            qualityScale: waterQuality.particleRate
+        )
+        fx.update(deltaTime: deltaTime)
+
         obstacles.update(
             deltaTime: deltaTime,
             runDistance: runDistance,
@@ -152,6 +180,8 @@ final class GameState: ObservableObject {
         } else if collectPulse > 0 {
             collectPulse = max(0, collectPulse - deltaTime * 3.5)
         }
+
+        prevSurferPose = surfer.pose
     }
 
     /// Jump-over / duck-under near-miss → neon flash + style points.
