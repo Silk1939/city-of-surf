@@ -88,6 +88,8 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     let unitBox: MTKMesh
     let waveMesh: MTKMesh
+    /// Überschlagende Hero-Wave als Sweep-Mesh — noch nicht gezeichnet (Schritt 2).
+    let heroWaveMesh: MTKMesh
     let coinMesh: MTKMesh
     /// Soft ellipsoid for wake / spray / mist (material 8).
     let sprayMesh: MTKMesh
@@ -398,6 +400,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                 segmentsZ: waterQ.waveSegmentsZ,
                 vertexDescriptor: vd
             )
+            // Statisches (u,v)-Parametergitter — einmal erzeugt, nie wieder hochgeladen.
+            heroWaveMesh = try HeroWaveMesh.make(device: device, vertexDescriptor: vd)
             // Upright thin disk (Y axis) — spun around Y like classic pickup coins.
             coinMesh = try MeshFactory.makeCylinder(
                 device: device,
@@ -433,7 +437,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         rs.addAllocations(shadowMap.allTextures)
         residentHDRTextures = hdrPipeline.allTextures
         rs.addAllocations(residentHDRTextures)
-        for mesh in [unitBox, waveMesh, coinMesh, sprayMesh]
+        for mesh in [unitBox, waveMesh, heroWaveMesh, coinMesh, sprayMesh]
             + surferMeshes.allMeshes
             + surfboardMeshes.allMeshes
             + cityKitMeshes.allMeshes

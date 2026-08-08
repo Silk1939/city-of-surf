@@ -12,14 +12,20 @@ enum MeshFactoryError: Error {
 }
 
 enum MeshFactory {
-    static func applyVertexDescriptor(_ mtlVertexDescriptor: MTLVertexDescriptor, to mdlMesh: MDLMesh) throws {
+    /// Named ModelIO descriptor for the shared Metal layout — also needed by meshes
+    /// that are built from raw buffers instead of an MDLMesh primitive.
+    static func modelIOVertexDescriptor(from mtlVertexDescriptor: MTLVertexDescriptor) throws -> MDLVertexDescriptor {
         let mdlVertexDescriptor = MTKModelIOVertexDescriptorFromMetal(mtlVertexDescriptor)
         guard let attributes = mdlVertexDescriptor.attributes as? [MDLVertexAttribute] else {
             throw MeshFactoryError.badVertexDescriptor
         }
         attributes[VertexAttribute.position.rawValue].name = MDLVertexAttributePosition
         attributes[VertexAttribute.texcoord.rawValue].name = MDLVertexAttributeTextureCoordinate
-        mdlMesh.vertexDescriptor = mdlVertexDescriptor
+        return mdlVertexDescriptor
+    }
+
+    static func applyVertexDescriptor(_ mtlVertexDescriptor: MTLVertexDescriptor, to mdlMesh: MDLMesh) throws {
+        mdlMesh.vertexDescriptor = try modelIOVertexDescriptor(from: mtlVertexDescriptor)
     }
 
     static func makeBox(

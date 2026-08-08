@@ -16,6 +16,9 @@ typedef NSInteger EnumBackingType;
 
 #include <simd/simd.h>
 
+/// Hero-Wave-Profilkurve — geteilter Code für Swift und Metal, kein Spiegeln von Formeln.
+#include "WaveProfile.h"
+
 typedef NS_ENUM(EnumBackingType, BufferIndex)
 {
     BufferIndexMeshPositions = 0,
