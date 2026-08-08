@@ -12,9 +12,20 @@ import simd
 
 struct ChaseCamera {
     /// Co-scaled with WaveField amp≈4.5 / crestShift≈3.2. Eye-Z must stay > -crestShift.
-    var eyeOffset = SIMD3<Float>(0, 5.2, -2.2)
-    /// Canyon ahead, slight down — sells the descending face without FOV-eating wall.
-    var lookAhead = SIMD3<Float>(0, 0.4, 10.0)
+    ///
+    /// Die Höhe ist der sekundäre Anteil von Befund A (Fall 1): mit 5.2 m stand das Auge
+    /// 4.05 m über dem Surfer bei nur 2.2 m Abstand nach hinten, die Blickachse zeigte
+    /// also 42.8° nach unten. Bei 34.04° halbem vertikalen FOV liegt der Horizont dann
+    /// außerhalb des Bildes. Der Wert wird gesenkt, bis die Blickachse flacher als das
+    /// halbe FOV steht. Eye-Z bleibt bei -2.2 (Kamera vor der Lippe, siehe WaveField).
+    var eyeOffset = SIMD3<Float>(0, 2.4, -2.2)
+    /// NUR die horizontale Blickrichtung — die Straße hinunter. Die y-Komponente wird
+    /// bewusst nicht mehr benutzt: sie war der primäre Anteil von Befund A (Fall 4).
+    /// Die vertikale Bildlage macht `screenAnchorY`, siehe `lookTarget(follow:)`.
+    var lookAhead = SIMD3<Float>(0, 0, 10.0)
+    /// Soll-Bildlage des Surfer-Ursprungs in NDC y: -1 unterer Bildrand, 0 Bildmitte.
+    /// -0.5 ist das untere Bilddrittel. Sinnvoll: -0.85 … -0.15 (Zielband Schritt 3).
+    var screenAnchorY: Float = -0.5
     var smoothEye = SIMD3<Float>(0, 10, -4)
     var fovDegrees: Float = 68
     var nearZ: Float = 0.12
@@ -96,9 +107,47 @@ struct ChaseCamera {
 
     private func saturate(_ v: Float) -> Float { max(0, min(1, v)) }
 
+    /// Der Punkt, auf den die Kamera zielt — die einzige Quelle der Blickrichtung.
+    ///
+    /// Befund A war strukturell: `lookAhead` hing den Zielpunkt 10 m VOR dem Surfer auf
+    /// eine feste Welthöhe. Wie weit der Surfer damit unter der Blickachse landet, hängt
+    /// dann an Abstand, Augenhöhe und Wellenhöhe — bei 44.83° unter der Achse und 34.04°
+    /// halbem FOV fällt er aus dem Bild. Ein konstanter Gegenoffset würde denselben
+    /// Fehler nur bei einer Wellenhöhe kompensieren und bei Sprüngen wieder brechen.
+    ///
+    /// Deshalb wird die Richtung in zwei unabhängige Anteile zerlegt:
+    ///  * `lookAhead.x/z` gibt die HORIZONTALE Richtung (Straße hinunter),
+    ///  * der Nickwinkel folgt aus dem Surfer selbst. Die Achse liegt genau
+    ///    `atan(-screenAnchorY * tan(fov/2))` über ihm.
+    ///
+    /// Für einen Punkt in der vertikalen Kameraebene gilt ndc.y = tan(θ_Surfer − Pitch) /
+    /// tan(fov/2); mit dieser Wahl des Pitch ist ndc.y per Konstruktion `screenAnchorY`,
+    /// unabhängig von Abstand, Sprunghöhe und Wellenhöhe.
+    func lookTarget(follow target: SIMD3<Float>) -> SIMD3<Float> {
+        let eye = smoothEye + shakeOffset
+        let aim = target + shakeOffset * 0.2
+        let toAim = aim - eye
+
+        var heading = SIMD3<Float>(toAim.x + lookAhead.x, 0, toAim.z + lookAhead.z)
+        let headingLength = simd_length(heading)
+        heading = headingLength > 1e-4 ? heading / headingLength : SIMD3(0, 0, 1)
+
+        // Winkel, unter dem der Surfer gerade steht (negativ = unter der Horizontalen).
+        let along = max(simd_dot(toAim, heading), 0.001)
+        let surferAngle = atan2f(toAim.y, along)
+        // Winkel, um den die Achse darüber liegen muss, damit er auf screenAnchorY landet.
+        let anchor = max(-0.95, min(0.95, screenAnchorY))
+        let lift = atanf(-anchor * tanf(Math.radians(fovDegrees) * 0.5))
+        let pitch = surferAngle + lift
+
+        let distance = max(simd_length(toAim), 1)
+        let forward = heading * cosf(pitch) + SIMD3<Float>(0, 1, 0) * sinf(pitch)
+        return eye + forward * distance
+    }
+
     func viewMatrix(follow target: SIMD3<Float>) -> matrix_float4x4 {
         let eye = smoothEye + shakeOffset
-        let look = target + lookAhead + shakeOffset * 0.2
+        let look = lookTarget(follow: target)
         var view = Math.lookAt(eye: eye, target: look, up: SIMD3(0, 1, 0))
         if abs(rollBias) > 0.0001 {
             view = Math.rotation(radians: rollBias, axis: SIMD3(0, 0, 1)) * view

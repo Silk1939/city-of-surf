@@ -65,7 +65,9 @@ struct DiagnosticsHarness {
             let projected = DiagnosticsMath.project(state.surfer.position, viewProjection: viewProj)
             let scale = DiagnosticsMath.scale(of: playerModel)
             let eye = camera.smoothEye
-            let target = state.surfer.position + camera.lookAhead
+            // Derselbe Zielpunkt, den `viewMatrix` benutzt — sonst misst der Harness
+            // eine Blickachse, die es im Spiel nicht gibt.
+            let target = camera.lookTarget(follow: state.surfer.position)
             let forward = simd_normalize(target - eye)
             let waterY = state.wave.height(
                 x: state.surfer.x,

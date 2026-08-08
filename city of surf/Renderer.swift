@@ -739,7 +739,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         if DiagnosticsMath.containsNonFinite(camera.smoothEye) { nonFinite.append("cameraEye") }
 
         let eye = camera.smoothEye
-        let target = playerPos + camera.lookAhead
+        // Derselbe Zielpunkt, den `viewMatrix` benutzt — die Diagnose muss die echte
+        // Blickachse messen, nicht eine nachgebaute.
+        let target = camera.lookTarget(follow: playerPos)
         let forward = simd_normalize(target - eye)
         // Gleiche Abtastung wie ChaseCamera.follow, damit Kamera und Messung
         // nachweislich dieselbe Wasserhöhe meinen.

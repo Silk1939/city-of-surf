@@ -1,125 +1,51 @@
-// Host-seitige Ursachenanalyse zu Befund A.
-// Kompiliert die echten Spielquellen für macOS und spiegelt DiagnosticsHarness.run.
-// Kein Metal, keine Meshes — nur Kamera, Höhenfeld, Surfer und Projektion.
+// Beweis: Kann die aktuelle Wellenformel überhaupt überhängen?
+// Ein Überhang existiert genau dann, wenn die Abbildung Parameter->Welt in z
+// nicht mehr monoton ist, also die Jacobi-Determinante dz_welt/dz_param <= 0 wird.
 
-import Foundation
 import simd
+import Foundation
 
-@MainActor
-func simulate(
-    frames: Int,
-    aspect: Float = 1170.0 / 2532.0,
-    configureCamera: ((inout ChaseCamera) -> Void)? = nil
-) -> (player: FrameDiagnostics.PlayerInfo, camera: FrameDiagnostics.CameraInfo) {
-    let state = GameState()
-    state.reset()
-    var camera = ChaseCamera()
-    configureCamera?(&camera)
-    let dt: Float = 1.0 / 60.0
+let wave = WaveField()
+let time: Float = 0
+let scrollZ: Float = 0
 
-    for _ in 0..<frames {
-        state.update(deltaTime: dt)
-        camera.follow(
-            surfer: state.surfer,
-            wave: state.wave,
-            time: state.time,
-            scrollZ: state.scrollZ,
-            shake: 0,
-            speed: state.speed,
-            deltaTime: dt
-        )
+var minJac = Float.greatestFiniteMagnitude
+var minJacAt: Float = 0
+let eps: Float = 0.001
+
+for i in 0...20000 {
+    let rz = -40 + Float(i) * 0.004        // Parameterraum entlang der Wellenachse
+    let z = rz - wave.crestShift
+    let d0 = wave.displacement(x: 0, z: z - eps, time: time, scrollZ: scrollZ)
+    let d1 = wave.displacement(x: 0, z: z + eps, time: time, scrollZ: scrollZ)
+    // Weltposition = Parameter + Verschiebung. Jacobi = d(welt_z)/d(param_z)
+    let jac = 1 + (d1.z - d0.z) / (2 * eps)
+    if jac < minJac { minJac = jac; minJacAt = rz }
+}
+
+print(String(format: "minimale Jacobi-Determinante dz_welt/dz_param = %.4f bei rz = %.2f", minJac, minJacAt))
+print("Überhang moeglich? \(minJac < 0)  (nur bei Werten < 0 faltet sich die Flaeche)")
+
+// Wie viel mehr z-Verschiebung waere noetig?
+print(String(format: "Faktor bis zur Faltung: %.2fx mehr z-Auslenkung noetig", 1 / max(1 - minJac, 0.0001)))
+
+// Gegenprobe: zwei Oberflaechenhoehen an derselben Welt-z-Position?
+var mapped: [Float] = []
+mapped.reserveCapacity(20001)
+for j in 0...20000 {
+    let param = -40 + Float(j) * 0.004
+    let d = wave.displacement(x: 0, z: param - wave.crestShift, time: time, scrollZ: scrollZ)
+    mapped.append(param - wave.crestShift + d.z)
+}
+var maxHits = 0
+var maxHitsZ: Float = 0
+for i in 0...2000 {
+    let worldZ = -20 + Float(i) * 0.02
+    var hits = 0
+    for j in 1..<mapped.count where (mapped[j - 1] - worldZ) * (mapped[j] - worldZ) < 0 {
+        hits += 1
     }
-
-    let viewM = camera.viewMatrix(follow: state.surfer.position)
-    let projM = camera.projectionMatrix(aspect: aspect)
-    let vp = projM * viewM
-    let eye = camera.smoothEye
-    let target = state.surfer.position + camera.lookAhead
-    let forward = simd_normalize(target - eye)
-    let waterY = state.wave.height(
-        x: state.surfer.x, z: state.surfer.position.z, time: state.time, scrollZ: state.scrollZ
-    )
-    // SurferVisual liegt neben MetalKit und ist hier nicht kompilierbar. Die
-    // Model-Matrix prüft testBefundA_playerModelMatrixIsSane im Test-Target mit
-    // der echten Funktion; hier geht es nur um Kamera und Höhenfeld.
-    let model = matrix_identity_float4x4
-    let scale = DiagnosticsMath.scale(of: model)
-    let proj = DiagnosticsMath.project(state.surfer.position, viewProjection: vp)
-
-    let cam = FrameDiagnostics.CameraInfo(
-        eye: eye, forward: forward, target: target,
-        nearZ: camera.nearZ, farZ: camera.farZ,
-        fovDegrees: camera.fovDegrees, aspect: aspect,
-        pitchDegrees: DiagnosticsMath.pitchDegrees(forward: forward),
-        halfFovVerticalDegrees: camera.fovDegrees * 0.5
-    )
-    let player = FrameDiagnostics.PlayerInfo(
-        position: state.surfer.position,
-        height: state.surfer.currentHeight,
-        clip: proj.clip,
-        ndc: proj.ndc,
-        inFrustum: DiagnosticsMath.inFrustum(ndc: proj.ndc),
-        drawn: true,
-        modelScale: scale,
-        modelDeterminant: DiagnosticsMath.determinant(of: model),
-        invisibleReason: DiagnosticsMath.invisibleReason(
-            clip: proj.clip, ndc: proj.ndc, drawn: true, scale: scale
-        ),
-        waterHeight: waterY,
-        heightAboveWater: state.surfer.position.y - waterY,
-        angleBelowViewAxisDegrees: DiagnosticsMath.angleBelowViewAxis(
-            eye: eye, target: target, point: state.surfer.position
-        )
-    )
-    return (player, cam)
+    if hits > maxHits { maxHits = hits; maxHitsZ = worldZ }
 }
-
-@MainActor
-func main() {
-    let n = 120
-    let base = simulate(frames: n)
-    let b = base.player
-    let c = base.camera
-
-    print("========== URSACHENANALYSE BEFUND A ==========")
-    print(String(format: "Kamera-Y            = %.3f", c.eye.y))
-    print(String(format: "Kamera-Pitch        = %.2f Grad (negativ = nach unten)", c.pitchDegrees))
-    print(String(format: "halbes vert. FOV    = %.2f Grad", c.halfFovVerticalDegrees))
-    print(String(format: "LookAt-Zielpunkt    = (%.3f, %.3f, %.3f)", c.target.x, c.target.y, c.target.z))
-    print(String(format: "Surfer-Y            = %.3f", b.position.y))
-    print(String(format: "Wasserhoehe (x,z)   = %.3f", b.waterHeight))
-    print(String(format: "Surfer-Y - Wasser   = %+.3f   <<< entscheidende Zahl", b.heightAboveWater))
-    print(String(format: "Winkel unter Achse  = %.2f Grad (Grenze %.2f)",
-                 b.angleBelowViewAxisDegrees, c.halfFovVerticalDegrees))
-    print(String(format: "NDC y               = %.4f", b.ndc.y))
-    print(String(format: "clip.w              = %+.3f", b.clip.w))
-    print("")
-    print("Fall 2/3 (Y-Verankerung falsch): \(b.heightAboveWater > 0 ? "WIDERLEGT" : "BESTAETIGT")")
-    print("")
-
-    let noLook = simulate(frames: n) { $0.lookAhead = SIMD3(0, 0, 0) }.player
-    let lowEye = simulate(frames: n) { $0.eyeOffset = SIMD3($0.eyeOffset.x, 1.2, $0.eyeOffset.z) }.player
-    let both = simulate(frames: n) {
-        $0.eyeOffset = SIMD3($0.eyeOffset.x, 1.2, $0.eyeOffset.z)
-        $0.lookAhead = SIMD3(0, 0, 0)
-    }.player
-
-    print("--- Kontrafaktische Trennung, Wirkung in NDC y ---")
-    print(String(format: "Baseline                      NDC y = %+.4f  Winkel %.1f  sichtbar=%@",
-                 b.ndc.y, b.angleBelowViewAxisDegrees, b.inFrustum ? "ja" : "nein"))
-    print(String(format: "nur lookAhead=0 (Fall 4 weg)  NDC y = %+.4f  d = %+.4f  Winkel %.1f  sichtbar=%@",
-                 noLook.ndc.y, noLook.ndc.y - b.ndc.y, noLook.angleBelowViewAxisDegrees,
-                 noLook.inFrustum ? "ja" : "nein"))
-    print(String(format: "nur eyeOffset.y=1.2 (Fall 1)  NDC y = %+.4f  d = %+.4f  Winkel %.1f  sichtbar=%@",
-                 lowEye.ndc.y, lowEye.ndc.y - b.ndc.y, lowEye.angleBelowViewAxisDegrees,
-                 lowEye.inFrustum ? "ja" : "nein"))
-    print(String(format: "beide zusammen                NDC y = %+.4f  Winkel %.1f  sichtbar=%@",
-                 both.ndc.y, both.angleBelowViewAxisDegrees, both.inFrustum ? "ja" : "nein"))
-    print("")
-    let d4 = abs(noLook.ndc.y - b.ndc.y)
-    let d1 = abs(lowEye.ndc.y - b.ndc.y)
-    print("Rangfolge: " + (d4 >= d1 ? "Fall 4 wirkt staerker als Fall 1" : "Fall 1 wirkt staerker als Fall 4"))
-    print("==============================================")
-}
-
-MainActor.assumeIsolated { main() }
+print("maximale Zahl von Oberflaechen an einer Welt-z-Position: \(maxHits) (bei z=\(maxHitsZ))")
+print("Barrel vorhanden? \(maxHits >= 3)   (1 = einfache Flaeche, >=3 = Ueberhang)")
