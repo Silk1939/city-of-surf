@@ -120,5 +120,7 @@ final class GameState: ObservableObject {
         frame.foamEdgeDepth = ArtDirection.Water.edgeFoamDepthMeters
         frame.bloomThreshold = ArtDirection.bloomThreshold
         frame.bloomIntensity = ArtDirection.bloomIntensity
+        frame.bloomBlurDirection = .zero
+        frame.bloomSoftKnee = ArtDirection.bloomSoftKnee
     }
 }

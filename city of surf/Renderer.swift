@@ -53,9 +53,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     var solidPipeline: MTLRenderPipelineState
     var wavePipeline: MTLRenderPipelineState
     var postPipeline: MTLRenderPipelineState
+    var bloomExtractPipeline: MTLRenderPipelineState
+    var bloomBlurHPipeline: MTLRenderPipelineState
+    var bloomBlurVPipeline: MTLRenderPipelineState
     var depthState: MTLDepthStencilState
     var sceneColorTexture: MTLTexture?
     var sceneDepthTexture: MTLTexture?
+    var bloomTexture: MTLTexture?
+    var bloomTempTexture: MTLTexture?
 
     var uniformBufferIndex = 0
     var objectDrawCount = 0
@@ -142,6 +147,24 @@ final class Renderer: NSObject, MTKViewDelegate {
                 vertex: "fullscreenVertex",
                 fragment: "tonemapFragment",
                 label: "ACES Tonemap"
+            )
+            bloomExtractPipeline = try Self.buildPipeline(
+                device: device,
+                sampleCount: 1,
+                colorPixelFormats: [RenderTargetFormat.hdrScene],
+                vertexDescriptor: nil,
+                vertex: "fullscreenVertex",
+                fragment: "bloomExtractFragment",
+                label: "Bloom Extract"
+            )
+            bloomBlurPipeline = try Self.buildPipeline(
+                device: device,
+                sampleCount: 1,
+                colorPixelFormats: [RenderTargetFormat.hdrScene],
+                vertexDescriptor: nil,
+                vertex: "fullscreenVertex",
+                fragment: "bloomBlurFragment",
+                label: "Bloom Blur"
             )
         } catch {
             print("Pipeline error: \(error)")
@@ -395,7 +418,10 @@ final class Renderer: NSObject, MTKViewDelegate {
             || sceneColorTexture?.height != Int(view.drawableSize.height) {
             rebuildSceneTargets(size: view.drawableSize)
         }
-        guard let sceneColorTexture, let sceneDepthTexture else { return }
+        guard let sceneColorTexture,
+              let sceneDepthTexture,
+              let bloomTexture,
+              let bloomTempTexture else { return }
 
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTime, 1.0 / 20.0))
@@ -530,6 +556,60 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         waveEncoder.endEncoding()
 
+        func encodeFullscreen(
+            label: String,
+            pipeline: MTLRenderPipelineState,
+            destination: MTLTexture,
+            source: MTLTexture,
+            blurDirection: SIMD2<Float>
+        ) {
+            let pass = MTL4RenderPassDescriptor()
+            pass.colorAttachments[0].texture = destination
+            pass.colorAttachments[0].loadAction = .dontCare
+            pass.colorAttachments[0].storeAction = .store
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+                fatalError("Failed to create \(label) encoder")
+            }
+            encoder.label = label
+            encoder.setCullMode(.none)
+            encoder.setRenderPipelineState(pipeline)
+            encoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
+
+            var postFrame = frameUniformsPointer().pointee
+            postFrame.bloomBlurDirection = blurDirection
+            frameUniformsPointer().pointee = postFrame
+
+            fragmentArgumentTable.setAddress(
+                frameUniformsGPUAddress(),
+                index: BufferIndex.frameUniforms.rawValue
+            )
+            fragmentArgumentTable.setTexture(source.gpuResourceID, index: TextureIndex.color.rawValue)
+            encoder.drawPrimitives(primitiveType: .triangle, vertexStart: 0, vertexCount: 3)
+            encoder.endEncoding()
+        }
+
+        encodeFullscreen(
+            label: "Bloom Extract",
+            pipeline: bloomExtractPipeline,
+            destination: bloomTempTexture,
+            source: sceneColorTexture,
+            blurDirection: .zero
+        )
+        encodeFullscreen(
+            label: "Bloom Blur H",
+            pipeline: bloomBlurPipeline,
+            destination: bloomTexture,
+            source: bloomTempTexture,
+            blurDirection: SIMD2(1, 0)
+        )
+        encodeFullscreen(
+            label: "Bloom Blur V",
+            pipeline: bloomBlurPipeline,
+            destination: bloomTempTexture,
+            source: bloomTexture,
+            blurDirection: SIMD2(0, 1)
+        )
+
         guard let postEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             fatalError("Failed to create post-process encoder")
         }
@@ -544,6 +624,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         fragmentArgumentTable.setTexture(
             sceneColorTexture.gpuResourceID,
             index: TextureIndex.color.rawValue
+        )
+        fragmentArgumentTable.setTexture(
+            bloomTempTexture.gpuResourceID,
+            index: TextureIndex.bloom.rawValue
         )
         postEncoder.drawPrimitives(
             primitiveType: .triangle,
@@ -575,10 +659,14 @@ final class Renderer: NSObject, MTKViewDelegate {
     private func rebuildSceneTargets(size: CGSize) {
         let width = max(Int(size.width), 1)
         let height = max(Int(size.height), 1)
+        let bloomWidth = max(width / 2, 1)
+        let bloomHeight = max(height / 2, 1)
         if sceneColorTexture?.width == width,
            sceneColorTexture?.height == height,
            sceneDepthTexture?.width == width,
-           sceneDepthTexture?.height == height {
+           sceneDepthTexture?.height == height,
+           bloomTexture?.width == bloomWidth,
+           bloomTexture?.height == bloomHeight {
             return
         }
 
@@ -600,26 +688,39 @@ final class Renderer: NSObject, MTKViewDelegate {
         depthDesc.storageMode = .private
         depthDesc.usage = [.renderTarget, .shaderRead]
 
+        let bloomDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: RenderTargetFormat.hdrScene,
+            width: bloomWidth,
+            height: bloomHeight,
+            mipmapped: false
+        )
+        bloomDesc.storageMode = .private
+        bloomDesc.usage = [.renderTarget, .shaderRead]
+
         guard let newColor = device.makeTexture(descriptor: colorDesc),
-              let newDepth = device.makeTexture(descriptor: depthDesc) else {
+              let newDepth = device.makeTexture(descriptor: depthDesc),
+              let newBloom = device.makeTexture(descriptor: bloomDesc),
+              let newBloomTemp = device.makeTexture(descriptor: bloomDesc) else {
             sceneColorTexture = nil
             sceneDepthTexture = nil
+            bloomTexture = nil
+            bloomTempTexture = nil
             return
         }
         newColor.label = "HDR Scene Color"
         newDepth.label = "Opaque Linear Depth"
+        newBloom.label = "Bloom A"
+        newBloomTemp.label = "Bloom B"
 
-        if let sceneColorTexture {
-            residencySet.removeAllocation(sceneColorTexture)
+        for old in [sceneColorTexture, sceneDepthTexture, bloomTexture, bloomTempTexture].compactMap({ $0 }) {
+            residencySet.removeAllocation(old)
         }
-        if let sceneDepthTexture {
-            residencySet.removeAllocation(sceneDepthTexture)
-        }
-        residencySet.addAllocation(newColor)
-        residencySet.addAllocation(newDepth)
+        residencySet.addAllocations([newColor, newDepth, newBloom, newBloomTemp])
         residencySet.commit()
         sceneColorTexture = newColor
         sceneDepthTexture = newDepth
+        bloomTexture = newBloom
+        bloomTempTexture = newBloomTemp
     }
 #endif
 }

@@ -71,6 +71,9 @@ typedef struct
     float foamEdgeDepth;
     float bloomThreshold;
     float bloomIntensity;
+    simd_float2 bloomBlurDirection;
+    float bloomSoftKnee;
+    float _padBloom;
 } FrameUniforms;
 
 typedef struct

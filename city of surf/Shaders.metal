@@ -359,13 +359,75 @@ static float3 aces_filmic(float3 color)
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
 }
 
-fragment float4 tonemapFragment(
+fragment float4 bloomExtractFragment(
     FullscreenOut in [[stage_in]],
     constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
     texture2d<float, access::read> sceneColor [[texture(TextureIndexColor)]])
 {
     uint2 pixel = uint2(in.position.xy);
+    // Upsample from half-res extract target by reading the matching HDR texel.
+    uint2 src = uint2(float2(pixel) * float2(sceneColor.get_width(), sceneColor.get_height())
+                      / float2(max(in.position.x, 1.0), max(in.position.y, 1.0)));
+    // When extract runs at half resolution, map pixel center into full HDR.
+    src = min(pixel * 2u, uint2(sceneColor.get_width() - 1, sceneColor.get_height() - 1));
+    float3 hdr = max(sceneColor.read(src).rgb, 0.0);
+    float brightness = max(max(hdr.r, hdr.g), hdr.b);
+    float knee = max(frame.bloomSoftKnee, 0.001);
+    float soft = brightness - frame.bloomThreshold + knee;
+    soft = clamp(soft, 0.0, 2.0 * knee);
+    soft = (soft * soft) / (4.0 * knee + 1e-4);
+    float contribution = max(soft, brightness - frame.bloomThreshold) / max(brightness, 1e-4);
+    return float4(hdr * saturate(contribution), 1.0);
+}
+
+fragment float4 bloomBlurHFragment(
+    FullscreenOut in [[stage_in]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    texture2d<float, access::sample> source [[texture(TextureIndexColor)]])
+{
+    constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+    float2 uv = in.position.xy / float2(source.get_width(), source.get_height());
+    float2 texel = float2(1.0, 0.0) / float2(source.get_width(), source.get_height());
+    const float weights[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
+    float3 color = source.sample(linearSampler, uv).rgb * weights[0];
+    for (int i = 1; i < 5; ++i) {
+        float2 offset = texel * float(i);
+        color += source.sample(linearSampler, uv + offset).rgb * weights[i];
+        color += source.sample(linearSampler, uv - offset).rgb * weights[i];
+    }
+    return float4(color, 1.0);
+}
+
+fragment float4 bloomBlurVFragment(
+    FullscreenOut in [[stage_in]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    texture2d<float, access::sample> source [[texture(TextureIndexColor)]])
+{
+    constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+    float2 uv = in.position.xy / float2(source.get_width(), source.get_height());
+    float2 texel = float2(0.0, 1.0) / float2(source.get_width(), source.get_height());
+    const float weights[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
+    float3 color = source.sample(linearSampler, uv).rgb * weights[0];
+    for (int i = 1; i < 5; ++i) {
+        float2 offset = texel * float(i);
+        color += source.sample(linearSampler, uv + offset).rgb * weights[i];
+        color += source.sample(linearSampler, uv - offset).rgb * weights[i];
+    }
+    return float4(color, 1.0);
+}
+
+fragment float4 tonemapFragment(
+    FullscreenOut in [[stage_in]],
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    texture2d<float, access::read> sceneColor [[texture(TextureIndexColor)]],
+    texture2d<float, access::sample> bloomColor [[texture(TextureIndexBloom)]])
+{
+    uint2 pixel = uint2(in.position.xy);
     float3 hdrColor = max(sceneColor.read(pixel).rgb * frame.exposure, 0.0);
+    constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
+    float2 uv = (float2(pixel) + 0.5) / float2(sceneColor.get_width(), sceneColor.get_height());
+    float3 bloom = bloomColor.sample(linearSampler, uv).rgb * frame.bloomIntensity;
+    hdrColor += bloom;
     float3 mapped = aces_filmic(hdrColor);
     float3 gammaCorrected = pow(mapped, float3(1.0 / 2.2));
     return float4(gammaCorrected, 1.0);
