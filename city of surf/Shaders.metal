@@ -640,6 +640,11 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float3 water = mix(deep, mid, smoothstep(0.05, 0.55, h));
     water = mix(water, shallow, smoothstep(0.55, 0.95, h));
 
+    // Thin flood film: asphalt reads through shallow water ahead of the crest.
+    float3 roadTint = float3(0.14, 0.13, 0.145);
+    float filmDepth = saturate(in.worldPos.y / 0.8);
+    water = mix(roadTint * 0.55, water, filmDepth);
+
     float edge = saturate((abs(in.worldPos.x) - 4.5) / 6.5);
     float edgeShade = mix(1.0, 0.78, edge * edge);
     water *= edgeShade * (0.45 + 0.55 * ndotl);
@@ -654,15 +659,13 @@ fragment float4 waveFragment(VOut in [[stage_in]],
     float sss = pow(saturate(dot(V, -L) * 0.5 + 0.5), 2.5) * pow(h, 2.0);
     water += float3(0.180, 0.769, 0.714) * 1.5 * sss; // ArtDirection.crestSSSIntensity
 
-    // Jacobian foam from vertex + streak/sparkle breakup (#FFF6E9).
-    float streak  = valueNoise(in.basePos.xz * float2(0.55, 0.16) + float2(0.0, -t * 1.6));
-    float sparkle = valueNoise(in.basePos.xz * 3.1 + float2(t * 0.7, -t * 3.0));
-    float foamMask = smoothstep(0.42, 0.72,
-                                in.foam
-                                + (streak - 0.5) * 0.55 * in.foam
-                                + (sparkle - 0.5) * 0.20);
-    float3 foamCol = float3(1.0, 0.965, 0.914) * (0.55 + 0.45 * ndotl);
-    water = mix(water, foamCol, foamMask * 0.92);
+    // Foam: noise only breaks up the mask (never darkens water). Hard gate on foamAmt.
+    float foamAmt = in.foam;
+    float streak = valueNoise(in.basePos.xz * float2(0.55, 0.16) + float2(0.0, -t * 1.6));
+    float foamMask = smoothstep(0.55, 0.80, foamAmt * (0.65 + 0.35 * streak));
+    foamMask *= step(0.15, foamAmt);   // no foam on calm film water
+    float3 foamCol = float3(1.0, 0.965, 0.914); // #FFF6E9 — always bright, never brown
+    water = mix(water, foamCol, foamMask);
 
     float3 irr = sampleEquirect(irradianceMap, iblSampler, N);
     irr = mix(irr, irr * kSkyHorizon * 1.3, 0.5);

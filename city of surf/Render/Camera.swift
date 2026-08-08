@@ -3,15 +3,18 @@
 //  city of surf
 //
 //  Stabilization: snap smoothEye on first/reset frame so we never start underwater.
+//  Crest framing: sit above local water, pull back modestly, look slightly down the face.
 //
 
 import simd
 
 struct ChaseCamera {
-    /// Co-scaled with WaveField.amplitude≈5.2 — stays above crest on snap.
-    var eyeOffset = SIMD3<Float>(0, 14.5, -18.0)
-    var lookAhead = SIMD3<Float>(0, 5.5, 22)
-    var smoothEye = SIMD3<Float>(0, 12, -18)
+    /// Co-scaled with WaveField.amplitude≈8 — above local water, not buried in the crest.
+    /// Z pullback stays short so the eye stays on the face side of the lip (crestShift≈3.9).
+    var eyeOffset = SIMD3<Float>(0, 6.2, -4.5)
+    /// Look ahead + slightly down so the steep face reads as a wall behind the surfer.
+    var lookAhead = SIMD3<Float>(0, 0.5, 8.0)
+    var smoothEye = SIMD3<Float>(0, 12, -8)
     var fovDegrees: Float = 72
     var nearZ: Float = 0.1
     var farZ: Float = 320
@@ -34,12 +37,15 @@ struct ChaseCamera {
 
     mutating func update(
         follow target: SIMD3<Float>,
+        waveHeight: Float,
         lean: Float,
         shake: Float,
         speed: Float = 18,
         deltaTime: Float
     ) {
         var desired = target + eyeOffset
+        // Follow the water surface (not surfer head) so crest framing stays readable.
+        desired.y = waveHeight + eyeOffset.y
         desired.x += lean * 1.4
         // Mild wipeout lift — never enough to fight the snap-above-water rule.
         desired.y += shake * 1.5

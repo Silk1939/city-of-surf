@@ -995,8 +995,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             deltaTime: dt
         )
 
+        let waveY = state.wave.height(
+            x: state.surfer.x,
+            z: state.surfer.position.z,
+            time: state.time,
+            scrollZ: state.scrollZ
+        )
         camera.update(
             follow: state.surfer.position,
+            waveHeight: waveY,
             lean: state.surfer.lean,
             shake: state.wipeoutShake,
             speed: state.speed,

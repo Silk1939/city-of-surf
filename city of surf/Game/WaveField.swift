@@ -8,14 +8,14 @@
 //  pile-up, 3-octave chop. `height` / `surfaceDisplacement` invert the horizontal
 //  pinch so gameplay sits on the *visual* surface, not the pre-pinch one.
 //
-//  Amplitude≈5.2 co-scales with ChaseCamera eyeOffset / lookAhead.
+//  Amplitude≈8 with ChaseCamera co-scaled — wave is the star, camera frames the face.
 //
 
 import simd
 
 struct WaveField {
-    /// Dramatic flood crest — keep in sync with ChaseCamera eyeOffset / lookAhead.
-    var amplitude: Float = 5.2
+    /// Tall flood crest — keep in sync with ChaseCamera eyeOffset / lookAhead.
+    var amplitude: Float = 8.0
     var faceWidth: Float = 14.0
     var speed: Float = 16.0
     /// 0.6 = soft rolling front, 0.9 = steep face, 1.1+ = plunging lip.
@@ -23,9 +23,9 @@ struct WaveField {
     var direction: SIMD2<Float> = SIMD2(0, 1)
     var rippleAmplitude: Float = 0.12
     var rippleLength: Float = 5.5
-    /// Crest alignment relative to surfer; 0 = crest at player Z.
+    /// Puts surfer (world z≈0) on the front face; crest rises behind (~faceWidth*0.28).
     /// Folded into `frame.scrollZ` on the GPU (see GameState).
-    var crestShift: Float = 0
+    var crestShift: Float = 3.9
 
     var wavelength: Float {
         get { faceWidth }

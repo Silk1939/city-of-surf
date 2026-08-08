@@ -106,7 +106,7 @@ struct SurferController {
         }
 
         let baseZ: Float = 0
-        // Visual surface (pinch inverted) — match GPU Gerstner flood so surfer sits on the face.
+        // On the front face via WaveField.crestShift (~faceWidth*0.28) — crest wall behind.
         let sample = wave.surfaceDisplacement(x: x, z: baseZ, time: time, scrollZ: scrollZ)
         var y = sample.y + 0.4
         let h = currentHeight
