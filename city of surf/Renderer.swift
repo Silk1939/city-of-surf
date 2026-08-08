@@ -10,7 +10,7 @@ import simd
 import QuartzCore
 
 let maxBuffersInFlight = 3
-let maxObjectsPerFrame = 128
+let maxObjectsPerFrame = 192
 
 enum RenderTargetFormat {
     static let hdrScene: MTLPixelFormat = .rgba16Float
@@ -70,7 +70,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     let unitBox: MTKMesh
     let waveMesh: MTKMesh
-    let surferMesh: MTKMesh
+    let boardMesh: MTKMesh
+    let coinMesh: MTKMesh
+    let proceduralSurfer: ProceduralSurferMeshes
 
     private var lastTime: CFTimeInterval = CACurrentMediaTime()
 
@@ -157,14 +159,23 @@ final class Renderer: NSObject, MTKViewDelegate {
                 fragment: "bloomExtractFragment",
                 label: "Bloom Extract"
             )
-            bloomBlurPipeline = try Self.buildPipeline(
+            bloomBlurHPipeline = try Self.buildPipeline(
                 device: device,
                 sampleCount: 1,
                 colorPixelFormats: [RenderTargetFormat.hdrScene],
                 vertexDescriptor: nil,
                 vertex: "fullscreenVertex",
-                fragment: "bloomBlurFragment",
-                label: "Bloom Blur"
+                fragment: "bloomBlurHFragment",
+                label: "Bloom Blur H"
+            )
+            bloomBlurVPipeline = try Self.buildPipeline(
+                device: device,
+                sampleCount: 1,
+                colorPixelFormats: [RenderTargetFormat.hdrScene],
+                vertexDescriptor: nil,
+                vertex: "fullscreenVertex",
+                fragment: "bloomBlurVFragment",
+                label: "Bloom Blur V"
             )
         } catch {
             print("Pipeline error: \(error)")
@@ -192,11 +203,9 @@ final class Renderer: NSObject, MTKViewDelegate {
                 segmentsZ: 180,
                 vertexDescriptor: vd
             )
-            surferMesh = try MeshFactory.makeBox(
-                device: device,
-                dimensions: SIMD3(0.55, 1.45, 0.4),
-                vertexDescriptor: vd
-            )
+            boardMesh = try MeshFactory.makeBoard(device: device, vertexDescriptor: vd)
+            coinMesh = try MeshFactory.makeCoin(device: device, vertexDescriptor: vd)
+            proceduralSurfer = try ProceduralSurferMeshes.make(device: device, vertexDescriptor: vd)
         } catch {
             print("Mesh error: \(error)")
             return nil
@@ -206,7 +215,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         residencyDesc.initialCapacity = 64
         let rs = try! device.makeResidencySet(descriptor: residencyDesc)
         rs.addAllocations([frameUniformBuffer, objectUniformBuffer])
-        for mesh in [unitBox, waveMesh, surferMesh] {
+        let meshSet = [unitBox, waveMesh, boardMesh, coinMesh, proceduralSurfer.torso, proceduralSurfer.head, proceduralSurfer.limb]
+        for mesh in meshSet {
             rs.addAllocations(mesh.vertexBuffers.map(\.buffer))
             rs.addAllocations(mesh.submeshes.map(\.indexBuffer.buffer))
         }
@@ -359,32 +369,47 @@ final class Renderer: NSObject, MTKViewDelegate {
             materialId: 0
         ))
 
-        // Surfer + board with lean
+        // Surfer (segmented) + oval board
         let sp = state.surfer.position
         let sh = state.surfer.currentHeight
         let lean = state.surfer.lean
+        proceduralSurfer.appendDrawItems(
+            to: &items,
+            position: sp,
+            height: sh,
+            lean: lean,
+            color: SIMD4(0.95, 0.42, 0.18, 1)
+        )
         let leanRot = Math.rotation(radians: lean * 0.35, axis: SIMD3(0, 0, 1))
-        let surferModel = Math.translation(SIMD3(sp.x, sp.y, sp.z))
-            * leanRot
-            * Math.scale(SIMD3(1, sh / 1.45, 1))
-        items.append(DrawItem(
-            mesh: surferMesh,
-            modelMatrix: surferModel,
-            color: SIMD4(0.95, 0.42, 0.18, 1),
-            isWave: false,
-            materialId: 3
-        ))
         let boardY = sp.y - sh * 0.5 + 0.08
-        let board = Math.translation(SIMD3(sp.x, boardY, sp.z))
-            * leanRot
-            * Math.scale(SIMD3(0.85, 0.1, 2.4))
+        let board = Math.translation(SIMD3(sp.x, boardY, sp.z)) * leanRot
         items.append(DrawItem(
-            mesh: unitBox,
+            mesh: boardMesh,
             modelMatrix: board,
-            color: SIMD4(0.15, 0.12, 0.08, 1),
+            color: SIMD4(0.18, 0.12, 0.08, 1),
             isWave: false,
             materialId: 3
         ))
+
+        // Coins
+        for coin in state.coins.coins where coin.active {
+            let pos = state.coins.worldPosition(
+                for: coin,
+                runDistance: state.runDistance,
+                wave: state.wave,
+                time: state.time,
+                scrollZ: state.scrollZ
+            )
+            let spin = Math.rotation(radians: state.time * 4.0 + coin.localZ, axis: SIMD3(0, 1, 0))
+            let model = Math.translation(pos) * spin
+            items.append(DrawItem(
+                mesh: coinMesh,
+                modelMatrix: model,
+                color: SIMD4(1.0, 0.82, 0.18, 1),
+                isWave: false,
+                materialId: 5
+            ))
+        }
 
         // Obstacles (cabs / debris)
         for o in state.obstacles.obstacles where o.active {
@@ -560,8 +585,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             label: String,
             pipeline: MTLRenderPipelineState,
             destination: MTLTexture,
-            source: MTLTexture,
-            blurDirection: SIMD2<Float>
+            source: MTLTexture
         ) {
             let pass = MTL4RenderPassDescriptor()
             pass.colorAttachments[0].texture = destination
@@ -574,11 +598,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             encoder.setCullMode(.none)
             encoder.setRenderPipelineState(pipeline)
             encoder.setArgumentTable(fragmentArgumentTable, stages: .fragment)
-
-            var postFrame = frameUniformsPointer().pointee
-            postFrame.bloomBlurDirection = blurDirection
-            frameUniformsPointer().pointee = postFrame
-
             fragmentArgumentTable.setAddress(
                 frameUniformsGPUAddress(),
                 index: BufferIndex.frameUniforms.rawValue
@@ -592,22 +611,19 @@ final class Renderer: NSObject, MTKViewDelegate {
             label: "Bloom Extract",
             pipeline: bloomExtractPipeline,
             destination: bloomTempTexture,
-            source: sceneColorTexture,
-            blurDirection: .zero
+            source: sceneColorTexture
         )
         encodeFullscreen(
             label: "Bloom Blur H",
-            pipeline: bloomBlurPipeline,
+            pipeline: bloomBlurHPipeline,
             destination: bloomTexture,
-            source: bloomTempTexture,
-            blurDirection: SIMD2(1, 0)
+            source: bloomTempTexture
         )
         encodeFullscreen(
             label: "Bloom Blur V",
-            pipeline: bloomBlurPipeline,
+            pipeline: bloomBlurVPipeline,
             destination: bloomTempTexture,
-            source: bloomTexture,
-            blurDirection: SIMD2(0, 1)
+            source: bloomTexture
         )
 
         guard let postEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {

@@ -16,10 +16,12 @@ final class GameState: ObservableObject {
     let wave = WaveField()
     var surfer = SurferController()
     var obstacles = ObstacleSystem()
+    var coins = CoinSystem()
 
     private(set) var time: Float = 0
     private(set) var runDistance: Float = 0
     private(set) var scrollZ: Float = 0
+    private(set) var coinScore: Int = 0
 
     private let baseSpeed: Float = 17
     private let maxSpeed: Float = 32
@@ -29,10 +31,12 @@ final class GameState: ObservableObject {
         runDistance = 0
         scrollZ = 0
         score = 0
+        coinScore = 0
         speed = baseSpeed
         isGameOver = false
         surfer = SurferController()
         obstacles.reset()
+        coins.reset()
     }
 
     func steer(toWorldX x: Float) {
@@ -55,7 +59,6 @@ final class GameState: ObservableObject {
         speed = min(maxSpeed, baseSpeed + runDistance * 0.011)
         runDistance += speed * deltaTime
         scrollZ = 0
-        score = Int(runDistance)
 
         surfer.update(deltaTime: deltaTime, wave: wave, time: time, scrollZ: scrollZ)
         obstacles.update(
@@ -65,6 +68,8 @@ final class GameState: ObservableObject {
             time: time,
             scrollZ: scrollZ
         )
+        coinScore += coins.update(runDistance: runDistance, surfer: surfer)
+        score = Int(runDistance) + coinScore * 10
 
         if obstacles.hitsSurfer(surfer, runDistance: runDistance, wave: wave, time: time, scrollZ: scrollZ) {
             isGameOver = true
