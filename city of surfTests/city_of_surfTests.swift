@@ -16,6 +16,9 @@ final class city_of_surfTests: XCTestCase {
         var camera = ChaseCamera()
         let boardPosition = SIMD3<Float>(1, 2, 3)
 
+        XCTAssertEqual(ChaseCameraTuning.eyeOffset, SIMD3<Float>(0, 4.5, -9.0))
+        XCTAssertEqual(ChaseCameraTuning.lookTargetHeight, 2.0)
+
         camera.update(
             follow: boardPosition,
             steering: 0.5,
